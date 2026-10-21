@@ -132,6 +132,11 @@ public class RulesTest {
         check(TaskRows.action("预约提醒 去完成").isEmpty(),"non-browse merged row rejected");
         check(TaskRows.action("去完成，按钮").equals("去完成")&&!TaskRows.merged("去完成，按钮"),"spoken button role suffix");
         check(TaskRows.action("去浏览 link").equals("去浏览"),"link role suffix");
+        for(String prompt:new String[]{"向上划","往下划","滑一下屏幕","滚动页面完成浏览","请上下 拖动浏览页面","向 上 滑 动浏览"})check(BrowseTiming.requiresScroll(prompt),"expanded scroll prompt "+prompt);
+        for(String prompt:new String[]{"继续浏览15秒","无需向上滑动","不要下划","不必滚动页面","仅有箭头动画"})check(!BrowseTiming.requiresScroll(prompt),"not an explicit textual scroll requirement "+prompt);
+        BrowsePlan override=new BrowsePlan();override.add(new BrowsePlan.Item("arrow","浏览15秒会场 去完成",true));override.add(new BrowsePlan.Item("still","浏览6秒好物页面 去完成"));
+        check(override.forceScroll("arrow"),"confirmed manual scroll override");
+        check(!override.forceScroll("still")&&!override.forceScroll("unknown"),"override does not affect other tasks");
         System.out.println("PASS: "+count+" checks");
     }
 }

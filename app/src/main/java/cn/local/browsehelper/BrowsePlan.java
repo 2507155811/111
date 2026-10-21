@@ -5,9 +5,15 @@ import java.util.*;
 /** A confirmed plan bounds each task as well as the whole run. */
 public final class BrowsePlan {
     public static final class Item {
-        public final String id,title,signature;
+        public final String id,title,signature,row;
         public final int remaining,seconds,initialProgress;
+        public final boolean forceScroll;
         public Item(String id,String row){
+            this(id,row,false);
+        }
+        public Item(String id,String row,boolean forceScroll){
+            this.forceScroll=forceScroll;
+            this.row=row;
             this.id=id;TaskProgress p=TaskProgress.parse(row);
             title=p==null?row.replaceAll("去浏览|去完成|去逛逛|逛一逛","").trim():p.name;
             remaining=p==null?1:p.total-p.current;seconds=TaskRules.seconds(row);
@@ -24,5 +30,6 @@ public final class BrowsePlan {
     public void confirmOne(String id){done.put(id,done.getOrDefault(id,0)+1);}
     public void skip(String id){if(items.containsKey(id))skipped.add(id);}
     public int skippedCount(){return skipped.size();}
+    public boolean forceScroll(String id){Item item=items.get(id);return item!=null&&item.forceScroll;}
     public static String signature(String row){TaskProgress p=TaskProgress.parse(row);return TaskRules.seconds(row)+":"+(p==null?"single":p.total);}
 }

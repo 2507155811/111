@@ -48,6 +48,7 @@ public class BrowseService extends AccessibilityService {
     private LinearLayout overlay;
     private TextView message;
     private Button toggle;
+    private Button markScroll;
     private final Set<String> attempted=new HashSet<>();
     private BrowsePlan approved=new BrowsePlan();
     private String deferredTask="";
@@ -62,7 +63,14 @@ public class BrowseService extends AccessibilityService {
     private final Runnable pulse=new Runnable(){public void run(){try{tick();}catch(RuntimeException e){pause("页面读取异常，请重新打开任务页");}if(running)handler.postDelayed(this,1000);}};
     @Override protected void onServiceConnected(){super.onServiceConnected();instance=this;}
     public String statusText(){return status;}
-    @Override public void onAccessibilityEvent(AccessibilityEvent e){}
+    @Override public void onAccessibilityEvent(AccessibilityEvent e){
+        if(!running||phase!=1||!target.equals(String.valueOf(e.getPackageName())))return;
+        StringBuilder s=new StringBuilder();for(CharSequence t:e.getText())if(t!=null&&s.length()<4000)s.append(t).append(' ');
+        if(e.getContentDescription()!=null)s.append(e.getContentDescription());
+        String prompt=s.toString();
+        if(TaskRules.blockedScreen(prompt)){pause("检测到验证或敏感提示，已暂停");return;}
+        if(BrowseTiming.requiresScroll(prompt)){needsScroll=true;setStatus("从页面提示识别到滑动要求，进入浏览页后执行");}
+    }
     @Override public void onInterrupt(){closeConfirmation();pause("服务中断，请重新检查页面");}
     @Override public void onDestroy(){dismiss();instance=null;super.onDestroy();}
     @Override public boolean onUnbind(Intent i){dismiss();instance=null;return super.onUnbind(i);}
@@ -73,6 +81,11 @@ public class BrowseService extends AccessibilityService {
         message=new TextView(this);message.setTextColor(Color.WHITE);message.setTextSize(12);overlay.addView(message,new LinearLayout.LayoutParams(-1,-2));
         LinearLayout actions=new LinearLayout(this);
         toggle=new Button(this);toggle.setTextSize(12);toggle.setText("扫描确认");toggle.setOnClickListener(v->{if(running)pause("已停止，请重新扫描确认");else{setStatus("正在扫描当前任务页，请稍候…");handler.postDelayed(()->{try{preview();}catch(RuntimeException e){closeConfirmation();setStatus("扫描异常："+e.getClass().getSimpleName()+"；请重新开启无障碍服务后重试");}},80);}});actions.addView(toggle,new LinearLayout.LayoutParams(0,dp(44),1));
+        markScroll=new Button(this);markScroll.setText("需滑动");markScroll.setTextSize(11);markScroll.setEnabled(false);markScroll.setOnClickListener(v->{
+            if(!running||phase!=1||taskId.isEmpty())return;
+            needsScroll=true;getSharedPreferences("scroll-overrides",0).edit().putBoolean(learnKey(taskId),true).apply();
+            setStatus("已记住本任务需要滑动；其他任务不受影响");
+        });actions.addView(markScroll,new LinearLayout.LayoutParams(0,dp(44),1));
         Button close=new Button(this);close.setText("关闭");close.setTextSize(12);close.setOnClickListener(v->dismiss());actions.addView(close,new LinearLayout.LayoutParams(0,dp(44),1));overlay.addView(actions);
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(dp(232),-2,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);
         p.gravity=Gravity.TOP|Gravity.END;p.y=dp(100);p.x=dp(8);
@@ -108,11 +121,12 @@ public class BrowseService extends AccessibilityService {
         confirmOverlay.addView(panelText("仅统计当前可见页面，非活动全部任务。只执行勾选项；新出现的任务需重新确认。",13));
         confirmOverlay.addView(panelText("无次数标记的条目本轮最多1次。预约、答题、搜索、加购、关注、支付等非浏览任务不执行。",12));
         ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(1);scroll.addView(rows);
-        List<CheckBox> checks=new ArrayList<>();
+        List<CheckBox> checks=new ArrayList<>(),slideChecks=new ArrayList<>();
         for(BrowsePlan.Item item:items){
             CheckBox check=new CheckBox(this);check.setTextColor(Color.WHITE);check.setTextSize(14);check.setChecked(true);
             check.setText(item.title+"\n剩余 "+item.remaining+" 次 · "+(item.seconds>0?item.seconds+"秒浏览":"时长未知，需明确完成提示"));
             checks.add(check);rows.addView(check);
+            CheckBox slide=new CheckBox(this);slide.setTextColor(Color.LTGRAY);slide.setTextSize(12);slide.setText("本项要求滑动（只有箭头/图片提示时可指定）");slide.setChecked(getSharedPreferences("scroll-overrides",0).getBoolean(learnKey(item.id),false));slideChecks.add(slide);rows.addView(slide);
         }
         confirmOverlay.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(260),dp(70)*items.size())));
         TextView totals=panelText("",14);confirmOverlay.addView(totals);
@@ -132,7 +146,11 @@ public class BrowseService extends AccessibilityService {
         go.setOnClickListener(v->{
             go.setEnabled(false);
             BrowsePlan selected=new BrowsePlan();List<BrowsePlan.Item> chosen=new ArrayList<>();
-            for(int i=0;i<checks.size();i++)if(checks.get(i).isChecked()){selected.add(items.get(i));chosen.add(items.get(i));}
+            for(int i=0;i<checks.size();i++)if(checks.get(i).isChecked()){
+                BrowsePlan.Item item=items.get(i);boolean force=slideChecks.get(i).isChecked();
+                selected.add(new BrowsePlan.Item(item.id,item.row,force));chosen.add(item);
+                getSharedPreferences("scroll-overrides",0).edit().putBoolean(learnKey(item.id),force).apply();
+            }
             int wanted=limit.getProgress();closeConfirmation();
             // Let focus return to the target app before re-reading it.
             handler.postDelayed(()->{try{validateAndStart(selected,chosen,wanted);}catch(RuntimeException e){pause("确认检查异常："+e.getClass().getSimpleName()+"；未开始任务");}},450);
@@ -158,7 +176,7 @@ public class BrowseService extends AccessibilityService {
         if(target.isEmpty())return;
         running=true;busy=false;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
     }
-    private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 完成 "+count+"/"+maxTasks+" 次 · 跳过 "+approved.skippedCount()+" 类\n"+s);}
+    private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 完成 "+count+"/"+maxTasks+" 次 · 跳过 "+approved.skippedCount()+" 类\n"+s);if(markScroll!=null)markScroll.setEnabled(running&&phase==1&&!needsScroll);}
     private void advance(long now,String reason){phase=0;since=now;nextTaskAt=now+1800;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
     private void pause(String s){running=false;handler.removeCallbacksAndMessages(null);busy=false;setStatus(s);if(toggle!=null)toggle.setText("扫描确认");}
     private void closeConfirmation(){if(confirmOverlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(confirmOverlay);}catch(RuntimeException ignored){}confirmOverlay=null;}}
@@ -196,7 +214,7 @@ public class BrowseService extends AccessibilityService {
                     }return;
                 }
                 before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;timedOut=false;
-                timing=new BrowseTiming();needsScroll=BrowseTiming.requiresScroll(c.rowText);
+                timing=new BrowseTiming();needsScroll=approved.forceScroll(taskId)||getSharedPreferences("scroll-overrides",0).getBoolean(learnKey(taskId),false)||BrowseTiming.requiresScroll(c.rowText);
                 boolean clicked=c.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);c.node.recycle();
                 if(!clicked){clicked=tap(taskButton);clickFallbackUsed=true;}
                 if(!clicked){approved.skip(taskId);advance(now,"本项按钮无法点击，已跳过");return;}
@@ -209,7 +227,7 @@ public class BrowseService extends AccessibilityService {
                     pause("本项超时且无法返回，已停止");return;
                 }
                 if(!leftTaskList&&elapsed>1500&&!isTaskList(text)&&!text.equals(before)){leftTaskList=true;browseSince=now;}
-                if(leftTaskList){timing.observe(text,now);needsScroll=needsScroll||BrowseTiming.requiresScroll(text);}
+                if(leftTaskList){timing.observe(text,now);needsScroll=needsScroll||BrowseTiming.requiresScroll(text);if(!needsScroll){scanned=0;needsScroll=scanScrollPrompts(root,0);}}
                 if(!leftTaskList&&elapsed>=4000&&!clickFallbackUsed&&text.equals(before)){
                     clickFallbackUsed=true;
                     if(tap(taskButton)){setStatus("网页按钮未跳转，尝试点击已识别的按钮位置…");return;}
@@ -217,7 +235,7 @@ public class BrowseService extends AccessibilityService {
                 if(!leftTaskList&&elapsed>12000){pause("按钮点击后未确认进入任务；请检查是否有遮挡或页面文字不可读");return;}
                 // A pre-existing success label in the task list must not count as success.
                 boolean successHint=elapsed>=3000&&!text.equals(before)&&TaskRules.newCompletion(text,before);
-                boolean timedCheck=leftTaskList&&timing.ready(expectedSeconds,now-browseSince,now);
+                boolean timedCheck=leftTaskList&&timing.ready(expectedSeconds,now-browseSince,now)&&(!needsScroll||browseSwipes>0);
                 if(successHint||timedCheck){
                     // Some task pages update the list in place; do not close it with BACK.
                     if(!isTaskList(text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
@@ -363,6 +381,11 @@ public class BrowseService extends AccessibilityService {
         Rect r=new Rect();n.getBoundsInScreen(r);
         if(n.isScrollable()&&r.height()>dp(220)&&r.width()>dp(160)&&n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=scrollBrowsePage(c,depth+1);c.recycle();if(ok)return true;}}return false;
+    }
+    private boolean scanScrollPrompts(AccessibilityNodeInfo n,int depth){
+        if(depth>60||++scanned>4000)return false;
+        if(n.isVisibleToUser()&&BrowseTiming.requiresScroll(label(n)))return true;
+        for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean found=scanScrollPrompts(c,depth+1);c.recycle();if(found)return true;}}return false;
     }
     private boolean swipeBrowse(AccessibilityNodeInfo root){
         Rect r=new Rect();root.getBoundsInScreen(r);

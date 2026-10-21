@@ -47,11 +47,11 @@ public class MainActivity extends Activity {
         button("停止并关闭控制条",()->{if(BrowseService.instance!=null)BrowseService.instance.dismiss();refresh();},false);
         text("适配说明",17,ink,8);
         text("面向小米 17 Pro Max / HyperOS，安卓 8.0 以上。没有手机实测，尚不能保证兼容当前双11活动。若服务被系统停止，可检查应用电池设置和后台运行权限；不要关闭系统安全保护。",13,muted,20);
-        text("版本 0.5.0 · 自动下一项 · 按需滑动",12,muted,0);
+        text("版本 0.6.0 · 箭头任务可标记并记住",12,muted,0);
     }
     @Override public void onResume(){super.onResume();refresh();}
     private void refresh(){if(status!=null)status.setText(BrowseService.instance==null?"● 无障碍服务尚未连接":"● 服务已连接 · "+BrowseService.instance.statusText());if(learned!=null)learned.setText("已学会 "+getSharedPreferences("learned",0).getAll().size()+" 种任务特征 · 仅保存在本机");}
-    private void clearLearned(){if(BrowseService.instance!=null)BrowseService.instance.dismiss();getSharedPreferences("learned",0).edit().clear().apply();refresh();Toast.makeText(this,"学习记录已清除",Toast.LENGTH_SHORT).show();}
+    private void clearLearned(){if(BrowseService.instance!=null)BrowseService.instance.dismiss();getSharedPreferences("learned",0).edit().clear().apply();getSharedPreferences("scroll-overrides",0).edit().clear().apply();refresh();Toast.makeText(this,"学习记录及滑动标记已清除",Toast.LENGTH_SHORT).show();}
     private void executeCommand(){LocalCommand c=LocalCommand.parse(command.getText().toString());if(c.action.equals("invalid")){Toast.makeText(this,c.error,Toast.LENGTH_LONG).show();return;}if(c.action.equals("stop")){if(BrowseService.instance!=null)BrowseService.instance.dismiss();refresh();return;}if(c.action.equals("clear")){new android.app.AlertDialog.Builder(this).setMessage("清除本机学习记录？").setNegativeButton("取消",null).setPositiveButton("清除",(d,w)->clearLearned()).show();return;}open(c.pkg,c);}
     private void open(String pkg){
         open(pkg,null);
