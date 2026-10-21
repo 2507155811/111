@@ -12,7 +12,7 @@ public final class TaskRules {
         boolean action = button.equals("去浏览") || button.equals("去完成") || button.equals("逛一逛") || button.equals("去逛逛");
         TaskProgress progress=TaskProgress.parse(row);
         if(TaskProgress.containsCounter(row)&&progress==null)return false;
-        return action && (row.contains("浏览") || row.contains("逛会场") || row.contains("逛店铺")) && !rowCompleted(row) && (progress==null||progress.incomplete());
+        return action && row.contains("浏览") && !rowCompleted(row) && (progress==null||progress.incomplete());
     }
     public static boolean blockedScreen(String text) {
         return Pattern.compile("请.{0,4}(登录|登陆)|验证码|安全验证|滑块|拖动.{0,8}(滑块|拼图)|确认支付|立即支付|提交订单|人脸识别|输入密码|访问异常|操作频繁").matcher(text).find();

@@ -19,7 +19,7 @@ with zipfile.ZipFile(dst/'browse-helper-source.zip','w',zipfile.ZIP_DEFLATED) as
     for p in ['README.md','.gitignore']:z.write(root/p,p)
 with zipfile.ZipFile(dst/'browse-helper-download.zip','w',zipfile.ZIP_DEFLATED) as z:
     z.write(dst/name,name)
-    z.writestr('安装说明.txt',f'浏览小助手 {version} 试用版\n解压安装 APK，可覆盖安装同签名旧版。\n开启无障碍服务，选择平台，手动打开活动任务列表后点悬浮条开始。\n按实时文字识别浏览时长及进度；预约、答题、搜索、跨应用等任务需手动处理。\n尚未真机验证；没有承诺所有任务都能完成。\n')
+    z.writestr('安装说明.txt',f'浏览小助手 {version} 试用版\n解压安装 APK，可覆盖安装同签名旧版。\n开启无障碍服务，选择平台，手动打开活动任务列表，点扫描确认，勾选浏览任务并确认本轮数量后执行。\n按实时文字识别浏览时长及进度；预约、答题、搜索、跨应用等任务需手动处理。\n尚未真机验证；没有承诺所有任务都能完成。\n')
 with (dst/'SHA256SUMS.txt').open('w') as f:
     for p in sorted(dst.iterdir()):
         if p.suffix in ['.apk','.zip']:

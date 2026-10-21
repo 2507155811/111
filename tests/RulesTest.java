@@ -2,13 +2,14 @@ import cn.local.browsehelper.TaskRules;
 import cn.local.browsehelper.LocalCommand;
 import cn.local.browsehelper.TaskProgress;
 import cn.local.browsehelper.NavigationRules;
+import cn.local.browsehelper.BrowsePlan;
 
 public class RulesTest {
     static int count;
     static void check(boolean value,String message){count++;if(!value)throw new AssertionError(message);}
     public static void main(String[] args){
         check(TaskRules.isBrowseTask("浏览会场15秒得金币 去浏览","去浏览"),"browse task");
-        check(TaskRules.isBrowseTask("逛店铺得奖励 去完成","去完成"),"store browsing");
+        check(!TaskRules.isBrowseTask("逛店铺得奖励 去完成","去完成"),"ambiguous visit without explicit browsing rejected");
         check(!TaskRules.isBrowseTask("看视频领红包 去完成","去完成"),"unknown action");
         for(String word:new String[]{"支付","下单","购买","关注","收藏","加购","邀请","分享","开通","登录","授权","预约","安装","直播","会员","密码","验证码"})check(!TaskRules.isBrowseTask("浏览商品并"+word+" 去完成","去完成"),"reject "+word);
         check(!TaskRules.isBrowseTask("浏览15秒 已完成 去浏览","去浏览"),"completed row");
@@ -86,6 +87,23 @@ public class RulesTest {
         boolean left=!NavigationRules.isTaskList(page);
         check(left&&TaskRules.readyToVerify(6,10000,left),"jd widget can trigger timed return verification");
         check(!TaskRules.readyToVerify(6,9999,left),"no early return");
+        BrowsePlan plan=new BrowsePlan();
+        BrowsePlan.Item item=new BrowsePlan.Item("task-a","好物沉浸看(2/10) 浏览15秒 去完成");
+        plan.add(item);
+        check(plan.total()==8,"remaining repetitions not row count");
+        check(plan.allows("task-a","好物沉浸看(2/10) 浏览15秒 去完成"),"approved row allowed");
+        check(!plan.allows("new-task","好物沉浸看(2/10) 浏览15秒 去完成"),"new task needs confirmation");
+        check(!plan.allows("task-a","好物沉浸看(2/10) 浏览30秒 去完成"),"changed duration needs confirmation");
+        check(!plan.allows("task-a","好物沉浸看(2/20) 浏览15秒 去完成"),"changed total needs confirmation");
+        check(!plan.allows("task-a","好物沉浸看(0/10) 浏览15秒 去完成"),"reset progress needs confirmation");
+        check(!plan.allows("task-a","好物沉浸看(5/10) 浏览15秒 去完成"),"unexpected progress needs confirmation");
+        for(int i=0;i<8;i++){check(plan.allows("task-a","好物沉浸看("+(i+2)+"/10) 浏览15秒 去完成"),"approved repetition "+i);plan.confirmOne("task-a");}
+        check(!plan.allows("task-a","好物沉浸看(0/10) 浏览15秒 去完成"),"confirmed quota cannot repeat after reset");
+        BrowsePlan one=new BrowsePlan();one.add(new BrowsePlan.Item("jd","浏览6秒精选页面 去完成"));
+        check(one.total()==1,"missing progress bounded to one attempt");one.confirmOne("jd");
+        check(!one.allows("jd","浏览6秒精选页面 去完成"),"single row cannot exceed confirmed quota");
+        check(!TaskRules.isBrowseTask("逛会场领金币 去完成","去完成"),"only explicit browse tasks");
+        check(!TaskRules.isBrowseTask("浏览商品并关注店铺 去完成","去完成"),"mixed browse and follow rejected");
         System.out.println("PASS: "+count+" checks");
     }
 }

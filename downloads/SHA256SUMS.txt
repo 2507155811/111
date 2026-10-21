@@ -1,5 +1,6 @@
 7d0bf4aeda94bea02e0a2ef97d8e18486c34bc55e4afda923bff588216e214ea  browse-helper-0.1.0.apk
 ab18a42c0d2d75127261ce49ecf6d709a5a4697426bcf91e8282a9cf0348b5f4  browse-helper-0.2.0.apk
 cad0dc6baf22bee389fe029f7f33b99bab9a9a93b54099e4f0d32faf2ac1215c  browse-helper-0.3.0.apk
-3aba6a7c030c284878fddd2e439c6fdb9c8d0dff029e0e9aa1dff8ad8a5ff9c1  browse-helper-download.zip
-3b9b9434b2ee2c51e3cc5e2c2105eace4c25968fa31a77c93a5ff2c3324b6726  browse-helper-source.zip
+61a30172266e4c843dad89a3aee34417bfd1f91181b6a01e3bd2091ff0f5446f  browse-helper-0.4.0.apk
+dbb30f37fdc2ea69187166354d2374df038ac833493c27ab4fbd2b3175b4d8cd  browse-helper-download.zip
+211943e607328967023883ae8a399c013cdab8fe4e5f259f643ab10c946b4f0d  browse-helper-source.zip

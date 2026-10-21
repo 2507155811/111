@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
         text("在系统无障碍设置中找到“浏览小助手”，阅读授权说明后开启。小米的设置入口可能因 HyperOS 版本而不同。",14,muted,12);
         button("打开无障碍设置",()->startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)),false);
         text("02  选择平台，打开活动任务页",19,ink,8);
-        text("进入应用后，手动打开活动任务列表，再点悬浮条“开始”。每轮读取实际名称、秒数和进度，不依赖固定坐标。支持重复浏览任务；仅核对成功后计数并学习。拖动悬浮条文字可移动。",14,muted,10);
+        text("进入应用后，手动打开任务列表，点悬浮条“扫描确认”。核对当前可见的浏览任务种类、剩余次数，勾选任务并调整本轮次数，确认后开始。只做已勾选的明确浏览任务；新任务须重扫确认。拖动悬浮条文字可移动。",14,muted,10);
         CheckBox check=new CheckBox(this);check.setText("我理解：将读取当前页面文字，并自动点击浏览任务；识别不明时暂停。可能触发平台风控，奖励不保证到账。");check.setTextColor(muted);check.setTextSize(14);check.setPadding(0,dp(6),0,dp(14));check.setOnCheckedChangeListener((v,c)->consent=c);body.addView(check);
         button("打开淘宝并显示控制条",()->open("com.taobao.taobao"),true);
         button("打开京东并显示控制条",()->open("com.jingdong.app.mall"),true);
@@ -47,7 +47,7 @@ public class MainActivity extends Activity {
         button("停止并关闭控制条",()->{if(BrowseService.instance!=null)BrowseService.instance.dismiss();refresh();},false);
         text("适配说明",17,ink,8);
         text("面向小米 17 Pro Max / HyperOS，安卓 8.0 以上。没有手机实测，尚不能保证兼容当前双11活动。若服务被系统停止，可检查应用电池设置和后台运行权限；不要关闭系统安全保护。",13,muted,20);
-        text("版本 0.3.0 · 浏览滑动 / 返回修正 · 无服务器",12,muted,0);
+        text("版本 0.4.0 · 任务数量确认 · 仅浏览任务",12,muted,0);
     }
     @Override public void onResume(){super.onResume();refresh();}
     private void refresh(){if(status!=null)status.setText(BrowseService.instance==null?"● 无障碍服务尚未连接":"● 服务已连接 · "+BrowseService.instance.statusText());if(learned!=null)learned.setText("已学会 "+getSharedPreferences("learned",0).getAll().size()+" 种任务特征 · 仅保存在本机");}
