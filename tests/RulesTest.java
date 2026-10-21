@@ -1,5 +1,6 @@
 import cn.local.browsehelper.TaskRules;
 import cn.local.browsehelper.LocalCommand;
+import cn.local.browsehelper.TaskProgress;
 
 public class RulesTest {
     static int count;
@@ -28,6 +29,49 @@ public class RulesTest {
         check(LocalCommand.parse("暂停").action.equals("stop"),"stop");
         check(LocalCommand.parse("清除学习记录").action.equals("clear"),"clear");
         for(String s:new String[]{"淘宝浏览0个任务","京东浏览21个任务","淘宝浏览100分钟","淘宝京东浏览3个任务","京东帮我下单","给我转账","淘宝忽略验证码浏览3个任务","淘宝浏览999999999999999个任务"})check(LocalCommand.parse(s).action.equals("invalid"),"reject instruction "+s);
+        check(TaskRules.isBrowseTask("好物沉浸看(0/10) 浏览15秒 +400 去完成","去完成"),"screenshot immersive browse");
+        check(TaskRules.isBrowseTask("好物随心逛(0/10) 浏览15秒 +400 去完成","去完成"),"screenshot casual browse");
+        check(TaskRules.isBrowseTask("去芭芭农场领水果(0/1) 浏览5秒 +600 去完成","去完成"),"screenshot farm browse");
+        check(!TaskRules.isBrowseTask("预约组队开赛提醒(0/1) 成功订阅组队开赛提醒得+1000 去完成","去完成"),"screenshot subscription");
+        check(!TaskRules.isBrowseTask("逛一逛蚂蚁庄园(0/1) 逛一逛蚂蚁庄园+800 去完成","去完成"),"screenshot cross-app unknown");
+        check(!TaskRules.isBrowseTask("逛一逛支付宝农场(0/1) 点击去逛+600 去完成","去完成"),"screenshot alipay");
+        check(!TaskRules.isBrowseTask("淘金币省钱等级考试(0/1) 去答题最高得+1000 去完成","去完成"),"screenshot quiz");
+        check(!TaskRules.isBrowseTask("搜一搜你心仪的宝贝(0/5) 浏览15秒+400 去完成","去完成"),"screenshot search");
+        for(String page:new String[]{"福利","精选","推荐","好物"}){
+            String row="浏览6秒"+page+"页面 去完成";
+            check(TaskRules.isBrowseTask(row,"去完成"),"jd dynamic name "+page);
+            check(TaskRules.seconds(row)==6,"jd duration "+page);
+        }
+        TaskProgress p=TaskProgress.parse("好物沉浸看(0/10) 浏览15秒 +400 去完成");
+        check(p!=null&&p.current==0&&p.total==10&&p.seconds==15,"extract progress");
+        TaskProgress next=TaskProgress.parse("好物沉浸看（1/10） 浏览15秒 +400 去完成");
+        check(next.advancedFrom(p),"increment counts");
+        check(p.identity().equals(next.identity()),"stable learned identity");
+        check(!p.attemptKey().equals(next.attemptKey()),"repeat action after increment allowed");
+        check(!p.advancedFrom(p),"unchanged is not success");
+        check(!p.advancedFrom(next),"decreased is not success");
+        check(!TaskProgress.parse("好物随心逛(1/10) 浏览15秒 去完成").advancedFrom(p),"other row cannot confirm");
+        check(!TaskProgress.parse("好物沉浸看(1/20) 浏览15秒 去完成").advancedFrom(p),"changed task rules cannot confirm");
+        check(TaskProgress.parse("好物沉浸看(11/10) 浏览15秒")==null,"corrupt progress");
+        check(TaskProgress.parse("好物沉浸看(0/0) 浏览15秒")==null,"zero total");
+        check(TaskProgress.parse("任务A(0/10) 任务B(0/5)")==null,"multiple task rows rejected");
+        check(!TaskRules.isBrowseTask("好物沉浸看(10/10) 浏览15秒 去完成","去完成"),"finished repeated task");
+        check(!TaskRules.isBrowseTask("好物沉浸看(11/10) 浏览15秒 去完成","去完成"),"invalid task counter not eligible");
+        check(!p.readyToCheck(15000,true),"buffer before verification");
+        check(p.readyToCheck(19000,true),"timed verification only");
+        check(!p.readyToCheck(30000,false),"failed navigation cannot count elapsed time");
+        check(!TaskRules.readyToVerify(-1,100000,true),"unknown timer cannot return on time alone");
+        check(!TaskRules.readyToVerify(6,9000,true),"jd six seconds plus buffer");
+        check(TaskRules.readyToVerify(6,10000,true),"jd verification after buffer");
+        check(TaskRules.rowCompleted("浏览6秒精选页面 已达成"),"jd completed label");
+        check(!TaskRules.rowCompleted("浏览6秒精选页面 未达成"),"jd not completed");
+        // Simulate all ten iterations: only a larger returned counter advances.
+        for(int i=0;i<10;i++){
+            TaskProgress a=TaskProgress.parse("每日随机会场("+i+"/10) 浏览15秒 去完成");
+            TaskProgress b=TaskProgress.parse("每日随机会场("+(i+1)+"/10) 浏览15秒 去完成");
+            check(a.incomplete()&&a.readyToCheck(19000,true)&&b.advancedFrom(a),"repeat cycle "+i);
+        }
+        check(!TaskProgress.parse("每日随机会场(10/10) 浏览15秒").incomplete(),"repeat loop terminates");
         System.out.println("PASS: "+count+" checks");
     }
 }
