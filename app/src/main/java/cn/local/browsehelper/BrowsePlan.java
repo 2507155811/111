@@ -17,9 +17,12 @@ public final class BrowsePlan {
     }
     private final Map<String,Item> items=new LinkedHashMap<>();
     private final Map<String,Integer> done=new HashMap<>();
+    private final Set<String> skipped=new HashSet<>();
     public void add(Item item){items.put(item.id,item);}
     public int total(){int sum=0;for(Item i:items.values())sum+=Math.max(0,i.remaining);return sum;}
-    public boolean allows(String id,String row){Item i=items.get(id);if(i==null||!i.signature.equals(signature(row))||done.getOrDefault(id,0)>=i.remaining)return false;TaskProgress p=TaskProgress.parse(row);return i.initialProgress<0?p==null:p!=null&&p.current==i.initialProgress+done.getOrDefault(id,0);}
+    public boolean allows(String id,String row){Item i=items.get(id);if(i==null||skipped.contains(id)||!i.signature.equals(signature(row))||done.getOrDefault(id,0)>=i.remaining)return false;TaskProgress p=TaskProgress.parse(row);return i.initialProgress<0?p==null:p!=null&&p.current==i.initialProgress+done.getOrDefault(id,0);}
     public void confirmOne(String id){done.put(id,done.getOrDefault(id,0)+1);}
+    public void skip(String id){if(items.containsKey(id))skipped.add(id);}
+    public int skippedCount(){return skipped.size();}
     public static String signature(String row){TaskProgress p=TaskProgress.parse(row);return TaskRules.seconds(row)+":"+(p==null?"single":p.total);}
 }

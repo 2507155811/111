@@ -50,9 +50,15 @@ public class BrowseService extends AccessibilityService {
     private Button toggle;
     private final Set<String> attempted=new HashSet<>();
     private BrowsePlan approved=new BrowsePlan();
+    private String deferredTask="";
+    private long nextTaskAt;
+    private boolean timedOut;
+    private BrowseTiming timing=new BrowseTiming();
+    private boolean needsScroll;
     private boolean previewing;
     private final Set<String> scanExcluded=new HashSet<>();
     private LinearLayout confirmOverlay;
+    private int previewChars,previewActions;
     private final Runnable pulse=new Runnable(){public void run(){try{tick();}catch(RuntimeException e){pause("页面读取异常，请重新打开任务页");}if(running)handler.postDelayed(this,1000);}};
     @Override protected void onServiceConnected(){super.onServiceConnected();instance=this;}
     public String statusText(){return status;}
@@ -66,7 +72,7 @@ public class BrowseService extends AccessibilityService {
         overlay=new LinearLayout(this);overlay.setOrientation(1);overlay.setPadding(dp(12),dp(8),dp(12),dp(8));overlay.setBackgroundColor(Color.rgb(20,39,51));
         message=new TextView(this);message.setTextColor(Color.WHITE);message.setTextSize(12);overlay.addView(message,new LinearLayout.LayoutParams(-1,-2));
         LinearLayout actions=new LinearLayout(this);
-        toggle=new Button(this);toggle.setTextSize(12);toggle.setText("扫描确认");toggle.setOnClickListener(v->{if(running)pause("已停止，请重新扫描确认");else preview();});actions.addView(toggle,new LinearLayout.LayoutParams(0,dp(44),1));
+        toggle=new Button(this);toggle.setTextSize(12);toggle.setText("扫描确认");toggle.setOnClickListener(v->{if(running)pause("已停止，请重新扫描确认");else{setStatus("正在扫描当前任务页，请稍候…");handler.postDelayed(()->{try{preview();}catch(RuntimeException e){closeConfirmation();setStatus("扫描异常："+e.getClass().getSimpleName()+"；请重新开启无障碍服务后重试");}},80);}});actions.addView(toggle,new LinearLayout.LayoutParams(0,dp(44),1));
         Button close=new Button(this);close.setText("关闭");close.setTextSize(12);close.setOnClickListener(v->dismiss());actions.addView(close,new LinearLayout.LayoutParams(0,dp(44),1));overlay.addView(actions);
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(dp(232),-2,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);
         p.gravity=Gravity.TOP|Gravity.END;p.y=dp(100);p.x=dp(8);
@@ -82,20 +88,23 @@ public class BrowseService extends AccessibilityService {
         try{
             if(!target.equals(String.valueOf(root.getPackageName()))){setStatus("请先打开所选应用的任务列表");return;}
             scanned=0;String text=flatten(root,0);
+            previewChars=text.length();previewActions=TaskRows.actionCount(text);
             if(TaskRules.blockedScreen(text)){setStatus("请先手动处理验证或登录");return;}
             previewing=true;scanExcluded.clear();
-            for(int i=0;i<50;i++){
+            long scanUntil=SystemClock.elapsedRealtime()+3500;
+            for(int i=0;i<50&&SystemClock.elapsedRealtime()<scanUntil;i++){
                 scanned=0;Candidate c=find(root,0);if(c==null)break;
                 scanExcluded.add(c.key);items.add(new BrowsePlan.Item(c.key,c.rowText));c.node.recycle();
             }
         }finally{previewing=false;scanExcluded.clear();root.recycle();}
-        if(items.isEmpty()){setStatus("本屏可执行浏览任务为0；请检查任务页、移动悬浮条或手动滚动后重扫");return;}
+        if(items.isEmpty()){setStatus("可执行浏览任务0 · 可读"+previewChars+"字 / 候选按钮"+previewActions+"个；请确认已打开任务面板，或重新开启无障碍服务");return;}
         showConfirmation(items);
     }
     private TextView panelText(String text,int size){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
     private void showConfirmation(final List<BrowsePlan.Item> items){
         confirmOverlay=new LinearLayout(this);confirmOverlay.setOrientation(1);confirmOverlay.setPadding(dp(18),dp(14),dp(18),dp(14));confirmOverlay.setBackgroundColor(Color.rgb(20,39,51));
         confirmOverlay.addView(panelText("确认浏览任务",21));
+        confirmOverlay.addView(panelText("连续执行已开启：完成后返回并自动下一个，无需逐项点击开始。",13));
         confirmOverlay.addView(panelText("仅统计当前可见页面，非活动全部任务。只执行勾选项；新出现的任务需重新确认。",13));
         confirmOverlay.addView(panelText("无次数标记的条目本轮最多1次。预约、答题、搜索、加购、关注、支付等非浏览任务不执行。",12));
         ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(1);scroll.addView(rows);
@@ -126,11 +135,11 @@ public class BrowseService extends AccessibilityService {
             for(int i=0;i<checks.size();i++)if(checks.get(i).isChecked()){selected.add(items.get(i));chosen.add(items.get(i));}
             int wanted=limit.getProgress();closeConfirmation();
             // Let focus return to the target app before re-reading it.
-            handler.postDelayed(()->validateAndStart(selected,chosen,wanted),450);
+            handler.postDelayed(()->{try{validateAndStart(selected,chosen,wanted);}catch(RuntimeException e){pause("确认检查异常："+e.getClass().getSimpleName()+"；未开始任务");}},450);
         });
         Button cancel=new Button(this);cancel.setText("取消，返回任务列表");cancel.setOnClickListener(v->{closeConfirmation();setStatus("已取消；可滚动任务列表后重新扫描");});confirmOverlay.addView(cancel);
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(Math.min(getResources().getDisplayMetrics().widthPixels-dp(24),dp(380)),-2,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);p.gravity=Gravity.CENTER;
-        try{((WindowManager)getSystemService(WINDOW_SERVICE)).addView(confirmOverlay,p);}catch(RuntimeException e){confirmOverlay=null;setStatus("无法显示任务确认面板，已停止");}
+        try{((WindowManager)getSystemService(WINDOW_SERVICE)).addView(confirmOverlay,p);setStatus("扫描完成："+items.size()+"类浏览任务；请在确认面板勾选数量");}catch(RuntimeException e){confirmOverlay=null;setStatus("无法显示任务确认面板："+e.getClass().getSimpleName()+"；已停止");}
     }
     private void validateAndStart(BrowsePlan selected,List<BrowsePlan.Item> chosen,int wanted){
         AccessibilityNodeInfo root=applicationRoot();Map<String,BrowsePlan.Item> current=new HashMap<>();
@@ -143,13 +152,14 @@ public class BrowseService extends AccessibilityService {
         }finally{previewing=false;scanExcluded.clear();root.recycle();}
         for(BrowsePlan.Item item:chosen){BrowsePlan.Item now=current.get(item.id);if(now==null||now.remaining!=item.remaining||!now.signature.equals(item.signature)){setStatus("任务或进度已变化，请重新扫描确认");return;}}
         if(selected.total()<1){setStatus("未选择任务，未开始");return;}
-        approved=selected;maxTasks=Math.min(wanted,selected.total());count=0;attempted.clear();start();
+        approved=selected;maxTasks=Math.min(wanted,selected.total());count=0;attempted.clear();deferredTask="";nextTaskAt=0;start();
     }
     private void start(){
         if(target.isEmpty())return;
         running=true;busy=false;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
     }
-    private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 本轮确认 "+count+" 项\n"+s);}
+    private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 完成 "+count+"/"+maxTasks+" 次 · 跳过 "+approved.skippedCount()+" 类\n"+s);}
+    private void advance(long now,String reason){phase=0;since=now;nextTaskAt=now+1800;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
     private void pause(String s){running=false;handler.removeCallbacksAndMessages(null);busy=false;setStatus(s);if(toggle!=null)toggle.setText("扫描确认");}
     private void closeConfirmation(){if(confirmOverlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(confirmOverlay);}catch(RuntimeException ignored){}confirmOverlay=null;}}
     public void dismiss(){closeConfirmation();pause("已关闭");if(overlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(overlay);}catch(RuntimeException ignored){}overlay=null;}message=null;toggle=null;}
@@ -166,6 +176,7 @@ public class BrowseService extends AccessibilityService {
             if(now-runSince>=maxMinutes*60000L){pause("已到指令时间上限，请手动核对当前任务");return;}
             if(phase==0){
                 if(count>=maxTasks){pause("本轮已达到"+maxTasks+"项上限，请手动检查奖励");return;}
+                if(now<nextTaskAt)return;
                 if(pendingScroll){
                     if(now-since<2500)return;
                     pendingScroll=false;
@@ -174,6 +185,7 @@ public class BrowseService extends AccessibilityService {
                 }
                 if(text.trim().length()<8){if(now-since>8000)pause("没有足够的可读文字，暂不支持此页面");return;}
                 scanned=0;Candidate c=find(root,0);
+                if(c==null&&!deferredTask.isEmpty()){String previous=deferredTask;deferredTask="";scanned=0;c=find(root,0);deferredTask=previous;}
                 if(c==null){
                     if(now-since>6000){
                         scanned=0;
@@ -183,15 +195,21 @@ public class BrowseService extends AccessibilityService {
                         pause("已无已确认的浏览任务；新任务需重新扫描确认");
                     }return;
                 }
-                before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;
+                before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;timedOut=false;
+                timing=new BrowseTiming();needsScroll=BrowseTiming.requiresScroll(c.rowText);
                 boolean clicked=c.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);c.node.recycle();
                 if(!clicked){clicked=tap(taskButton);clickFallbackUsed=true;}
-                if(!clicked){pause("任务按钮不可点击，请手动处理");return;}
+                if(!clicked){approved.skip(taskId);advance(now,"本项按钮无法点击，已跳过");return;}
                 setStatus("已打开浏览任务，等待页面反馈…");
             }else if(phase==1){
                 long elapsed=now-taskSince;
-                if(elapsed>90000){pause("90秒内未确认任务完成，请手动检查");return;}
+                if(elapsed>90000){
+                    if(isTaskList(text)){approved.skip(taskId);advance(now,"本项超时且已在列表，已跳过");return;}
+                    if(performGlobalAction(GLOBAL_ACTION_BACK)){timedOut=true;phase=2;returnSince=now;backAttempts=1;setStatus("本项超时，返回列表后核对并继续下一项…");return;}
+                    pause("本项超时且无法返回，已停止");return;
+                }
                 if(!leftTaskList&&elapsed>1500&&!isTaskList(text)&&!text.equals(before)){leftTaskList=true;browseSince=now;}
+                if(leftTaskList){timing.observe(text,now);needsScroll=needsScroll||BrowseTiming.requiresScroll(text);}
                 if(!leftTaskList&&elapsed>=4000&&!clickFallbackUsed&&text.equals(before)){
                     clickFallbackUsed=true;
                     if(tap(taskButton)){setStatus("网页按钮未跳转，尝试点击已识别的按钮位置…");return;}
@@ -199,21 +217,21 @@ public class BrowseService extends AccessibilityService {
                 if(!leftTaskList&&elapsed>12000){pause("按钮点击后未确认进入任务；请检查是否有遮挡或页面文字不可读");return;}
                 // A pre-existing success label in the task list must not count as success.
                 boolean successHint=elapsed>=3000&&!text.equals(before)&&TaskRules.newCompletion(text,before);
-                boolean timedCheck=TaskRules.readyToVerify(expectedSeconds,now-browseSince,leftTaskList);
+                boolean timedCheck=leftTaskList&&timing.ready(expectedSeconds,now-browseSince,now);
                 if(successHint||timedCheck){
                     // Some task pages update the list in place; do not close it with BACK.
                     if(!isTaskList(text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
                     phase=2;returnSince=now;backAttempts=1;setStatus(successHint?"检测到完成提示，返回核对进度…":"浏览计时结束，返回核对是否增加进度…");return;
                 }
-                if(leftTaskList&&now-browseSince>=2500&&now-lastSwipe>=3500&&browseSwipes<6){
+                if(leftTaskList&&needsScroll&&now-browseSince>=2500&&now-lastSwipe>=3500&&browseSwipes<6){
                     scanned=0;
                     if(scrollBrowsePage(root,0)||swipeBrowse(root)){
                         browseSwipes++;lastSwipe=now;setStatus("浏览任务内滑动 "+browseSwipes+" 次，等待倒计时和完成反馈…");return;
                     }
                     lastSwipe=now;
                 }
-                int seconds=TaskRules.seconds(text);
-                setStatus(seconds>=0?"页面倒计时约 "+seconds+" 秒，等待完成提示":"浏览中 "+elapsed/1000+" 秒；等待明确的完成提示");
+                int seconds=BrowseTiming.remaining(text);
+                setStatus(seconds>=0?"页面倒计时 "+seconds+" 秒"+(needsScroll?" · 按提示滑动":" · 停留浏览"):"浏览中 "+(leftTaskList?(now-browseSince)/1000:0)+" 秒"+(needsScroll?" · 需要滑动":" · 未要求滑动")+"；等待完成反馈");
             }else if(phase==2){
                 if(now-returnSince<2000)return;
                 if(!isTaskList(text)){
@@ -232,8 +250,8 @@ public class BrowseService extends AccessibilityService {
                 confirmVisited=0;
                 if(confirmedRow(root,taskId,0)){
                     getSharedPreferences("learned",0).edit().putBoolean(learnKey(taskId),true).apply();
-                    approved.confirmOne(taskId);count++;phase=0;since=now;setStatus("已核对完成并记住任务，继续已确认任务…");
-                }else if(now-returnSince>8000)pause("返回后未确认该任务已完成，请手动核对");
+                    approved.confirmOne(taskId);count++;advance(now,"已核对完成并记住任务");
+                }else if(timedOut||now-returnSince>8000){approved.skip(taskId);advance(now,"已回到列表，但本项完成未确认，跳过且不计成功");}
             }
         }finally{root.recycle();}
     }
@@ -241,15 +259,17 @@ public class BrowseService extends AccessibilityService {
     private String flatten(AccessibilityNodeInfo n,int depth){
         if(n==null||depth>45||++scanned>2400||!n.isVisibleToUser())return "";
         StringBuilder s=new StringBuilder();CharSequence t=n.getText(),d=n.getContentDescription();if(t!=null)s.append(t).append(' ');if(d!=null&&(t==null||!d.toString().equals(t.toString())))s.append(d).append(' ');
+        if(TaskRows.merged(s.toString()))return s.toString();
         for(int i=0;i<n.getChildCount()&&s.length()<18000;i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){s.append(flatten(c,depth+1));c.recycle();}}return s.toString();
     }
-    private String label(AccessibilityNodeInfo n){CharSequence t=n.getText();if(t==null||t.length()==0)t=n.getContentDescription();return t==null?"":t.toString().trim();}
+    private String label(AccessibilityNodeInfo n){CharSequence t=n.getText(),d=n.getContentDescription();String text=t==null?"":t.toString().trim(),desc=d==null?"":d.toString().trim();if(text.isEmpty())return desc;if(desc.isEmpty()||text.contains(desc))return text;if(desc.contains(text))return desc;return text+" "+desc;}
     private String key(String row){return row.replaceAll("去浏览|去完成|逛一逛|去逛逛|任务已完成|已完成|已领取|已达成|已浏览|明日再来|已打卡|完成|[0-9]+|\\s+","");}
     private Candidate find(AccessibilityNodeInfo n,int depth){
         if(depth>45||++scanned>2400||!n.isVisibleToUser())return null;
-        String button=label(n);
-        if(button.equals("去浏览")||button.equals("去完成")||button.equals("逛一逛")||button.equals("去逛逛")){
-            AccessibilityNodeInfo row=n.getParent();
+        String nodeLabel=label(n),button=TaskRows.action(nodeLabel);
+        boolean merged=TaskRows.merged(nodeLabel);
+        if(!button.isEmpty()){
+            AccessibilityNodeInfo row=merged?AccessibilityNodeInfo.obtain(n):n.getParent();
             for(int k=0;k<5&&row!=null;k++){
                 int saved=scanned;scanned=0;String text=flatten(row,0);scanned=saved;
                 // Do not treat an entire list containing multiple buttons as one task row.
@@ -257,12 +277,13 @@ public class BrowseService extends AccessibilityService {
                 TaskProgress progress=TaskProgress.parse(text);
                 String id=progress==null?key(text):progress.identity();
                 String attempt=progress==null?id:progress.attemptKey();
-                if(buttons==1&&TaskRules.isBrowseTask(text,button)&&(previewing?!scanExcluded.contains(id):approved.allows(id,text)&&!attempted.contains(attempt))&&(!learnedOnly||getSharedPreferences("learned",0).getBoolean(learnKey(id),false))){
+                if(buttons==1&&TaskRules.isBrowseTask(text,button)&&(previewing?!scanExcluded.contains(id):!id.equals(deferredTask)&&approved.allows(id,text)&&!attempted.contains(attempt))&&(!learnedOnly||getSharedPreferences("learned",0).getBoolean(learnKey(id),false))){
                     AccessibilityNodeInfo clickable=AccessibilityNodeInfo.obtain(n);
                     for(int p=0;p<3&&!clickable.isClickable();p++){AccessibilityNodeInfo parent=clickable.getParent();if(parent==null)break;clickable.recycle();clickable=parent;}
                     Rect actionBounds=new Rect();clickable.getBoundsInScreen(actionBounds);
                     if(actionBounds.height()>dp(230)){clickable.recycle();clickable=AccessibilityNodeInfo.obtain(n);}
                     Rect rect=new Rect();n.getBoundsInScreen(rect);
+                    if(merged&&rect.width()>dp(120)){rect.left=rect.right-Math.min(dp(86),rect.width()/3);}
                     if(!rect.isEmpty()&&rect.width()>=dp(20)&&rect.width()<dp(260)&&rect.height()>=dp(12)&&rect.height()<dp(180)&&(previewing||!overlapsOverlay(rect))){row.recycle();return new Candidate(clickable,id,attempt,progress,TaskRules.seconds(text),rect,text);}
                     clickable.recycle();
                 }

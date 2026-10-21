@@ -3,6 +3,8 @@ import cn.local.browsehelper.LocalCommand;
 import cn.local.browsehelper.TaskProgress;
 import cn.local.browsehelper.NavigationRules;
 import cn.local.browsehelper.BrowsePlan;
+import cn.local.browsehelper.BrowseTiming;
+import cn.local.browsehelper.TaskRows;
 
 public class RulesTest {
     static int count;
@@ -104,6 +106,32 @@ public class RulesTest {
         check(!one.allows("jd","浏览6秒精选页面 去完成"),"single row cannot exceed confirmed quota");
         check(!TaskRules.isBrowseTask("逛会场领金币 去完成","去完成"),"only explicit browse tasks");
         check(!TaskRules.isBrowseTask("浏览商品并关注店铺 去完成","去完成"),"mixed browse and follow rejected");
+        BrowsePlan queue=new BrowsePlan();queue.add(new BrowsePlan.Item("a","浏览6秒福利页面 去完成"));queue.add(new BrowsePlan.Item("b","浏览6秒精选页面 去完成"));
+        queue.skip("a");check(!queue.allows("a","浏览6秒福利页面 去完成"),"failed task excluded");
+        check(queue.allows("b","浏览6秒精选页面 去完成"),"next task still executable");
+        check(queue.skippedCount()==1,"skipped tracked separately");
+        check(BrowseTiming.requiresScroll("请上下滑动浏览15秒"),"scroll explicitly required");
+        check(!BrowseTiming.requiresScroll("浏览15秒即可完成"),"no scrolling for ordinary dwell");
+        check(!BrowseTiming.requiresScroll("无需滑动，停留15秒即可完成"),"explicit no scrolling");
+        check(!BrowseTiming.requiresScroll("不需要手动上滑"),"negated scrolling requirement");
+        check(!BrowseTiming.requiresScroll("拖动滑块验证"),"no gesture for captcha");
+        check(BrowseTiming.remaining("再浏览8秒")==8,"live countdown extraction");
+        check(BrowseTiming.remaining("浏览15秒即可完成")==-1,"duration instruction is not live countdown");
+        BrowseTiming clock=new BrowseTiming();clock.observe("还需8秒",1000);
+        check(!clock.ready(5,12000,8000),"live countdown overrides shorter original duration");
+        clock.observe("还需8秒",8000);check(!clock.ready(5,20000,13000),"frozen positive countdown must not be called finished");
+        clock.observe("剩余0秒",15000);check(!clock.ready(5,20000,15500),"zero countdown settling delay");
+        clock.observe("剩余0秒",16000);check(clock.ready(5,20000,16500),"zero does not keep postponing deadline");
+        BrowseTiming fallback=new BrowseTiming();check(!fallback.ready(15,18000,20000)&&fallback.ready(15,19000,21000),"initial-duration fallback plus buffer");
+        check(!fallback.ready(-1,90000,90000),"unknown duration never guessed");
+        check(TaskRows.action("浏览6秒福利页面 去完成").equals("去完成"),"jd merged row recognized");
+        check(TaskRows.merged("浏览6秒精选页面 去完成"),"jd merged row detected");
+        check(TaskRows.action("去完成").equals("去完成")&&!TaskRows.merged("去完成"),"separate button still recognized");
+        check(TaskRows.action("浏览6秒页面并下单 去完成").isEmpty(),"mixed merged row rejected");
+        check(TaskRows.action("福利浏览6秒 去完成 精选浏览6秒 去完成").isEmpty(),"full list is not one merged row");
+        check(TaskRows.action("预约提醒 去完成").isEmpty(),"non-browse merged row rejected");
+        check(TaskRows.action("去完成，按钮").equals("去完成")&&!TaskRows.merged("去完成，按钮"),"spoken button role suffix");
+        check(TaskRows.action("去浏览 link").equals("去浏览"),"link role suffix");
         System.out.println("PASS: "+count+" checks");
     }
 }

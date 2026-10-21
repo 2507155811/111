@@ -26,12 +26,12 @@ PY
 if [ ! -f build/local-testing.p12 ]; then
  keytool -genkeypair -keystore build/local-testing.p12 -storepass android -keypass android -alias local -keyalg RSA -keysize 3072 -validity 3650 -dname 'CN=Browse Helper Local Testing' -noprompt
 fi
-java -jar "$tool_dir/build-tools/lib/apksigner.jar" sign --ks build/local-testing.p12 --ks-key-alias local --ks-pass pass:android --out dist/browse-helper-0.4.0.apk build/aligned.apk
-java -jar "$tool_dir/build-tools/lib/apksigner.jar" verify --verbose dist/browse-helper-0.4.0.apk
-"$tool_dir/build-tools/aapt2" dump badging dist/browse-helper-0.4.0.apk > build/apk-info.txt
+java -jar "$tool_dir/build-tools/lib/apksigner.jar" sign --ks build/local-testing.p12 --ks-key-alias local --ks-pass pass:android --out dist/browse-helper-0.5.0.apk build/aligned.apk
+java -jar "$tool_dir/build-tools/lib/apksigner.jar" verify --verbose dist/browse-helper-0.5.0.apk
+"$tool_dir/build-tools/aapt2" dump badging dist/browse-helper-0.5.0.apk > build/apk-info.txt
 python - <<'PY'
 import zipfile
-with zipfile.ZipFile('dist/browse-helper-0.4.0.apk') as z:
+with zipfile.ZipFile('dist/browse-helper-0.5.0.apk') as z:
  assert z.testzip() is None
  assert 'classes.dex' in z.namelist()
  assert 'res/xml/accessibility.xml' in z.namelist()
@@ -41,4 +41,4 @@ assert 'cn.local.browsehelper.MainActivity' in info
 assert 'android.permission.INTERNET' not in info
 print('APK package, entry activity, resources, SDK and absence of Internet permission verified.')
 PY
-sha256sum dist/browse-helper-0.4.0.apk > dist/SHA256SUMS.txt
+sha256sum dist/browse-helper-0.5.0.apk > dist/SHA256SUMS.txt
