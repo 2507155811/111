@@ -1,6 +1,7 @@
 import cn.local.browsehelper.TaskRules;
 import cn.local.browsehelper.LocalCommand;
 import cn.local.browsehelper.TaskProgress;
+import cn.local.browsehelper.NavigationRules;
 
 public class RulesTest {
     static int count;
@@ -72,6 +73,19 @@ public class RulesTest {
             check(a.incomplete()&&a.readyToCheck(19000,true)&&b.advancedFrom(a),"repeat cycle "+i);
         }
         check(!TaskProgress.parse("每日随机会场(10/10) 浏览15秒").incomplete(),"repeat loop terminates");
+        check(NavigationRules.isTaskList("做任务赚能量 好物沉浸看(0/10) 浏览15秒 去完成"),"taobao list");
+        check(NavigationRules.isTaskList("完成任务打卡 领红包 浏览6秒福利页面 去完成"),"jd list");
+        check(NavigationRules.isTaskList("随机会场 浏览5秒 去完成 商城 浏览15秒 去完成"),"generic list");
+        check(!NavigationRules.isTaskList("任务完成 去完成 浏览商品 还需15秒"),"completion widget must not block return timer");
+        check(!NavigationRules.isTaskList("浏览任务 去完成 请上下滑动浏览15秒"),"browse page not a list");
+        check(!NavigationRules.isTaskList("升级赛车拿钱 去赚能量"),"activity landing page");
+        check(NavigationRules.isEntry("去赚能量")&&NavigationRules.isEntry("做任务"),"reopen task entries");
+        check(!NavigationRules.isEntry("立即支付")&&!NavigationRules.isEntry("领红包"),"entry whitelist");
+        // Regression: a browse widget containing task/action text used to prevent leaving phase 1.
+        String page="浏览任务 去完成 还需6秒 上下滑动浏览";
+        boolean left=!NavigationRules.isTaskList(page);
+        check(left&&TaskRules.readyToVerify(6,10000,left),"jd widget can trigger timed return verification");
+        check(!TaskRules.readyToVerify(6,9999,left),"no early return");
         System.out.println("PASS: "+count+" checks");
     }
 }

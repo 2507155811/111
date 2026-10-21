@@ -1,6 +1,8 @@
 package cn.local.browsehelper;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
+import android.graphics.Path;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -13,6 +15,7 @@ import android.view.MotionEvent;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.*;
 import java.util.*;
 
@@ -34,6 +37,10 @@ public class BrowseService extends AccessibilityService {
     private long since, taskSince, returnSince;
     private long runSince;
     private long browseSince;
+    private long lastSwipe;
+    private int browseSwipes, backAttempts;
+    private boolean clickFallbackUsed;
+    private Rect taskButton;
     private int maxTasks=20, maxMinutes=20;
     private boolean learnedOnly;
     private String version="";
@@ -72,7 +79,7 @@ public class BrowseService extends AccessibilityService {
     public void dismiss(){pause("已关闭");if(overlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(overlay);}catch(RuntimeException ignored){}overlay=null;}message=null;toggle=null;}
     private void tick(){
         if(!running||busy)return;
-        AccessibilityNodeInfo root=getRootInActiveWindow();
+        AccessibilityNodeInfo root=applicationRoot();
         if(root==null){if(SystemClock.elapsedRealtime()-since>10000)pause("无法读取页面，请手动返回任务页");return;}
         try{
             String pkg=root.getPackageName()==null?"":root.getPackageName().toString();
@@ -97,36 +104,52 @@ public class BrowseService extends AccessibilityService {
                         if(isTaskList(text)&&listScrolls<8&&scrollTaskList(root,0)){
                             lastList=text;seenLists.add(text);listScrolls++;pendingScroll=true;since=now;setStatus("查看下一屏任务（"+listScrolls+"/8）；跳过非浏览任务");return;
                         }
-                        pause("没有更多可自动处理的浏览任务；"+TaskRules.manualReason(text));
+                        pause("未找到可执行任务（可读"+text.length()+"字）；"+TaskRules.manualReason(text));
                     }return;
                 }
-                before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";
+                before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;
                 boolean clicked=c.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);c.node.recycle();
+                if(!clicked){clicked=tap(taskButton);clickFallbackUsed=true;}
                 if(!clicked){pause("任务按钮不可点击，请手动处理");return;}
                 setStatus("已打开浏览任务，等待页面反馈…");
             }else if(phase==1){
                 long elapsed=now-taskSince;
                 if(elapsed>90000){pause("90秒内未确认任务完成，请手动检查");return;}
                 if(!leftTaskList&&elapsed>1500&&!isTaskList(text)&&!text.equals(before)){leftTaskList=true;browseSince=now;}
+                if(!leftTaskList&&elapsed>=4000&&!clickFallbackUsed&&text.equals(before)){
+                    clickFallbackUsed=true;
+                    if(tap(taskButton)){setStatus("网页按钮未跳转，尝试点击已识别的按钮位置…");return;}
+                }
+                if(!leftTaskList&&elapsed>12000){pause("按钮点击后未确认进入任务；请检查是否有遮挡或页面文字不可读");return;}
                 // A pre-existing success label in the task list must not count as success.
                 boolean successHint=elapsed>=3000&&!text.equals(before)&&TaskRules.newCompletion(text,before);
                 boolean timedCheck=TaskRules.readyToVerify(expectedSeconds,now-browseSince,leftTaskList);
                 if(successHint||timedCheck){
                     // Some task pages update the list in place; do not close it with BACK.
                     if(!isTaskList(text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
-                    phase=2;returnSince=now;setStatus(successHint?"检测到完成提示，返回核对进度…":"浏览计时结束，返回核对是否增加进度…");return;
+                    phase=2;returnSince=now;backAttempts=1;setStatus(successHint?"检测到完成提示，返回核对进度…":"浏览计时结束，返回核对是否增加进度…");return;
+                }
+                if(leftTaskList&&now-browseSince>=2500&&now-lastSwipe>=3500&&browseSwipes<6){
+                    scanned=0;
+                    if(scrollBrowsePage(root,0)||swipeBrowse(root)){
+                        browseSwipes++;lastSwipe=now;setStatus("浏览任务内滑动 "+browseSwipes+" 次，等待倒计时和完成反馈…");return;
+                    }
+                    lastSwipe=now;
                 }
                 int seconds=TaskRules.seconds(text);
                 setStatus(seconds>=0?"页面倒计时约 "+seconds+" 秒，等待完成提示":"浏览中 "+elapsed/1000+" 秒；等待明确的完成提示");
             }else if(phase==2){
                 if(now-returnSince<2000)return;
                 if(!isTaskList(text)){
-                    if(!reopened&&target.equals("com.taobao.taobao")){
+                    if(!reopened){
                         scanned=0;String entry=findEntry(root,0);
                         if(!entry.isEmpty()){
                             if(!entry.equals(pendingEntry)){pendingEntry=entry;setStatus("已返回活动首页，准备打开任务列表…");return;}
                             scanned=0;if(clickEntry(root,entry,0)){reopened=true;returnSince=now;setStatus("已打开任务列表，核对进度中…");return;}
                         }
+                    }
+                    if(!reopened&&pendingEntry.isEmpty()&&now-returnSince>=5000&&backAttempts<3&&TaskRules.seconds(text)>=0){
+                        if(performGlobalAction(GLOBAL_ACTION_BACK)){backAttempts++;returnSince=now;setStatus("仍在浏览页，继续返回（"+backAttempts+"/3）…");return;}
                     }
                     if(now-returnSince>12000)pause("未确认返回任务列表，请手动返回后重新开始");return;
                 }
@@ -138,16 +161,16 @@ public class BrowseService extends AccessibilityService {
             }
         }finally{root.recycle();}
     }
-    private boolean isTaskList(String text){return (text.contains("做任务赚能量")||text.contains("任务")||text.contains("赚步数"))&&(text.contains("去浏览")||text.contains("去完成")||text.contains("已完成")||text.contains("明日再来"));}
+    private boolean isTaskList(String text){return NavigationRules.isTaskList(text);}
     private String flatten(AccessibilityNodeInfo n,int depth){
-        if(n==null||depth>22||++scanned>1600||!n.isVisibleToUser())return "";
+        if(n==null||depth>45||++scanned>2400||!n.isVisibleToUser())return "";
         StringBuilder s=new StringBuilder();CharSequence t=n.getText(),d=n.getContentDescription();if(t!=null)s.append(t).append(' ');if(d!=null&&(t==null||!d.toString().equals(t.toString())))s.append(d).append(' ');
         for(int i=0;i<n.getChildCount()&&s.length()<18000;i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){s.append(flatten(c,depth+1));c.recycle();}}return s.toString();
     }
     private String label(AccessibilityNodeInfo n){CharSequence t=n.getText();if(t==null||t.length()==0)t=n.getContentDescription();return t==null?"":t.toString().trim();}
     private String key(String row){return row.replaceAll("去浏览|去完成|逛一逛|去逛逛|任务已完成|已完成|已领取|已达成|已浏览|明日再来|已打卡|完成|[0-9]+|\\s+","");}
     private Candidate find(AccessibilityNodeInfo n,int depth){
-        if(depth>22||++scanned>1600||!n.isVisibleToUser())return null;
+        if(depth>45||++scanned>2400||!n.isVisibleToUser())return null;
         String button=label(n);
         if(button.equals("去浏览")||button.equals("去完成")||button.equals("逛一逛")||button.equals("去逛逛")){
             AccessibilityNodeInfo row=n.getParent();
@@ -161,8 +184,10 @@ public class BrowseService extends AccessibilityService {
                 if(buttons==1&&TaskRules.isBrowseTask(text,button)&&!attempted.contains(attempt)&&(!learnedOnly||getSharedPreferences("learned",0).getBoolean(learnKey(id),false))){
                     AccessibilityNodeInfo clickable=AccessibilityNodeInfo.obtain(n);
                     for(int p=0;p<3&&!clickable.isClickable();p++){AccessibilityNodeInfo parent=clickable.getParent();if(parent==null)break;clickable.recycle();clickable=parent;}
-                    Rect rect=new Rect();clickable.getBoundsInScreen(rect);
-                    if(clickable.isClickable()&&clickable.isEnabled()&&!rect.isEmpty()&&rect.height()<dp(230)&&!overlapsOverlay(rect)){row.recycle();return new Candidate(clickable,id,attempt,progress,TaskRules.seconds(text));}
+                    Rect actionBounds=new Rect();clickable.getBoundsInScreen(actionBounds);
+                    if(actionBounds.height()>dp(230)){clickable.recycle();clickable=AccessibilityNodeInfo.obtain(n);}
+                    Rect rect=new Rect();n.getBoundsInScreen(rect);
+                    if(!rect.isEmpty()&&rect.width()>=dp(20)&&rect.width()<dp(260)&&rect.height()>=dp(12)&&rect.height()<dp(180)&&!overlapsOverlay(rect)){row.recycle();return new Candidate(clickable,id,attempt,progress,TaskRules.seconds(text),rect);}
                     clickable.recycle();
                 }
                 AccessibilityNodeInfo parent=row.getParent();row.recycle();row=parent;
@@ -187,10 +212,10 @@ public class BrowseService extends AccessibilityService {
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=confirmedRow(c,id,depth+1);c.recycle();if(ok)return true;}}return false;
     }
     private boolean overlapsOverlay(Rect r){if(overlay==null)return false;int[] xy=new int[2];overlay.getLocationOnScreen(xy);return Rect.intersects(r,new Rect(xy[0],xy[1],xy[0]+overlay.getWidth(),xy[1]+overlay.getHeight()));}
-    // Only two exact task-list entries seen in the user's activity screenshots.
+    // Task-list entry labels only; no reward claims or purchase controls.
     private String findEntry(AccessibilityNodeInfo n,int depth){
         if(depth>20||++scanned>1200||!n.isVisibleToUser())return "";
-        String t=label(n);if(t.equals("去赚能量")||t.equals("赚步数"))return t;
+        String t=label(n);if(NavigationRules.isEntry(t))return t;
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){String found=findEntry(c,depth+1);c.recycle();if(!found.isEmpty())return found;}}return "";
     }
     private boolean clickEntry(AccessibilityNodeInfo n,String entry,int depth){
@@ -198,7 +223,7 @@ public class BrowseService extends AccessibilityService {
         if(label(n).equals(entry)){
             AccessibilityNodeInfo click=AccessibilityNodeInfo.obtain(n);
             for(int k=0;k<2&&!click.isClickable();k++){AccessibilityNodeInfo p=click.getParent();if(p==null)break;click.recycle();click=p;}
-            Rect r=new Rect();click.getBoundsInScreen(r);boolean ok=click.isClickable()&&click.isEnabled()&&!r.isEmpty()&&r.height()<dp(200)&&!overlapsOverlay(r)&&click.performAction(AccessibilityNodeInfo.ACTION_CLICK);click.recycle();return ok;
+            Rect r=new Rect();n.getBoundsInScreen(r);boolean ok=false;if(!r.isEmpty()&&r.height()<dp(200)&&!overlapsOverlay(r)){ok=click.isEnabled()&&click.performAction(AccessibilityNodeInfo.ACTION_CLICK);if(!ok)ok=tap(r);}click.recycle();return ok;
         }
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=clickEntry(c,entry,depth+1);c.recycle();if(ok)return true;}}return false;
     }
@@ -212,6 +237,44 @@ public class BrowseService extends AccessibilityService {
         }return false;
     }
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
+    private AccessibilityNodeInfo applicationRoot(){
+        AccessibilityNodeInfo active=getRootInActiveWindow();
+        if(active!=null){String p=String.valueOf(active.getPackageName());if(!p.equals(getPackageName()))return active;active.recycle();}
+        List<AccessibilityWindowInfo> windows=getWindows();AccessibilityNodeInfo result=null;
+        for(AccessibilityWindowInfo w:windows){
+            if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION&&(w.isActive()||w.isFocused())){
+                AccessibilityNodeInfo r=w.getRoot();
+                if(r!=null){if(result==null&&target.equals(String.valueOf(r.getPackageName())))result=r;else r.recycle();}
+            }w.recycle();
+        }return result;
+    }
+    private boolean tap(Rect r){
+        if(r==null||r.isEmpty()||overlapsOverlay(r))return false;
+        Path p=new Path();p.moveTo(r.centerX(),r.centerY());return gesture(p,90);
+    }
+    private boolean gesture(Path p,int duration){
+        if(!running||busy)return false;
+        busy=true;
+        boolean accepted=dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(p,0,duration)).build(),new GestureResultCallback(){
+            @Override public void onCompleted(GestureDescription g){busy=false;}
+            @Override public void onCancelled(GestureDescription g){busy=false;}
+        },handler);
+        if(!accepted)busy=false;return accepted;
+    }
+    private boolean scrollBrowsePage(AccessibilityNodeInfo n,int depth){
+        if(depth>35||++scanned>1800||!n.isVisibleToUser())return false;
+        Rect r=new Rect();n.getBoundsInScreen(r);
+        if(n.isScrollable()&&r.height()>dp(220)&&r.width()>dp(160)&&n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;
+        for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=scrollBrowsePage(c,depth+1);c.recycle();if(ok)return true;}}return false;
+    }
+    private boolean swipeBrowse(AccessibilityNodeInfo root){
+        Rect r=new Rect();root.getBoundsInScreen(r);
+        if(r.height()<dp(260)||r.width()<dp(200))return false;
+        int x=r.left+r.width()/3;
+        Rect pathBounds=new Rect(x-2,r.top+r.height()*40/100,x+2,r.top+r.height()*72/100);
+        if(overlapsOverlay(pathBounds))return false;
+        Path p=new Path();p.moveTo(x,pathBounds.bottom);p.lineTo(x,pathBounds.top);return gesture(p,600);
+    }
     private String learnKey(String id){try{byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest((target+":"+version+":"+id).getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder s=new StringBuilder();for(byte b:hash)s.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return s.toString();}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
-    private static final class Candidate{final AccessibilityNodeInfo node;final String key,attempt;final TaskProgress progress;final int seconds;Candidate(AccessibilityNodeInfo n,String k,String a,TaskProgress p,int s){node=n;key=k;attempt=a;progress=p;seconds=s;}}
+    private static final class Candidate{final AccessibilityNodeInfo node;final String key,attempt;final TaskProgress progress;final int seconds;final Rect rect;Candidate(AccessibilityNodeInfo n,String k,String a,TaskProgress p,int s,Rect r){node=n;key=k;attempt=a;progress=p;seconds=s;rect=new Rect(r);}}
 }
