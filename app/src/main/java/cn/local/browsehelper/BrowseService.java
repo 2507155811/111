@@ -63,7 +63,7 @@ public class BrowseService extends AccessibilityService {
     private final Set<String> scanExcluded=new HashSet<>();
     private LinearLayout confirmOverlay;
     private int previewChars,previewActions,scanWindows;
-    private final Runnable pulse=new Runnable(){public void run(){try{tick();}catch(RuntimeException e){pause("页面读取异常，请重新打开任务页");}if(running)handler.postDelayed(this,1000);}};
+    private final Runnable pulse=new Runnable(){public void run(){try{tick();}catch(RuntimeException e){pause("页面读取异常，请重新打开任务页");}if(running)handler.postDelayed(this,phase==1?1000:250);}};
     @Override protected void onServiceConnected(){super.onServiceConnected();instance=this;}
     public String statusText(){return status;}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
@@ -182,7 +182,7 @@ public class BrowseService extends AccessibilityService {
         running=true;busy=false;unreadableSince=0;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
     }
     private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 完成 "+count+(maxTasks>0?"/"+maxTasks:"（数量待检测）")+" 次 · 跳过 "+approved.skippedCount()+" 类\n"+s);if(markScroll!=null)markScroll.setEnabled(running&&phase==1&&!needsScroll);}
-    private void advance(long now,String reason){phase=0;since=now;nextTaskAt=now+1800;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
+    private void advance(long now,String reason){phase=0;since=now;nextTaskAt=now+350;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
     private void pause(String s){running=false;handler.removeCallbacksAndMessages(null);busy=false;setStatus(s);if(toggle!=null)toggle.setText("扫描确认");}
     private void closeConfirmation(){if(confirmOverlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(confirmOverlay);}catch(RuntimeException ignored){}confirmOverlay=null;}}
     public void dismiss(){closeConfirmation();pause("已关闭");if(overlay!=null){try{((WindowManager)getSystemService(WINDOW_SERVICE)).removeView(overlay);}catch(RuntimeException ignored){}overlay=null;}message=null;toggle=null;}
@@ -213,13 +213,20 @@ public class BrowseService extends AccessibilityService {
                     since=now;
                 }
                 if(text.trim().length()<8){if(now-since>8000)pause("没有足够的可读文字，暂不支持此页面");return;}
-                if(autoDiscover&&now>=nextDiscoveryAt){
-                    nextDiscoveryAt=now+2500;
-                    int added=discoverTasks(root);
-                    if(added>0){maxTasks=approved.executionLimit(requestLimit);setStatus("自动检测新增 "+added+" 类纯浏览任务，继续执行…");}
-                }
                 scanned=0;Candidate c=find(root,0);
                 if(c==null&&!deferredTask.isEmpty()){String previous=deferredTask;deferredTask="";scanned=0;c=find(root,0);deferredTask=previous;}
+                // Run a ready confirmed task first; scan for new tasks only when needed.
+                if(c==null&&autoDiscover&&now>=nextDiscoveryAt){
+                    nextDiscoveryAt=now+2500;
+                    int added=discoverTasks(root);
+                    if(added>0){
+                        maxTasks=approved.executionLimit(requestLimit);
+                        scanned=0;c=find(root,0);
+                        if(c==null&&!deferredTask.isEmpty()){
+                            String previous=deferredTask;deferredTask="";scanned=0;c=find(root,0);deferredTask=previous;
+                        }
+                    }
+                }
                 if(c==null){
                     if(now-since>6000){
                         scanned=0;
@@ -272,7 +279,7 @@ public class BrowseService extends AccessibilityService {
                 int seconds=BrowseTiming.remaining(text);
                 setStatus(seconds>=0?"页面倒计时 "+seconds+" 秒"+(needsScroll?" · 按提示滑动":" · 停留浏览"):"浏览中 "+(leftTaskList?(now-browseSince)/1000:0)+" 秒"+(needsScroll?" · 需要滑动":" · 未要求滑动")+"；等待完成反馈");
             }else if(phase==2){
-                if(now-returnSince<2000)return;
+                if(now-returnSince<500)return;
                 if(!returnedToList(root,text)){
                     if(!reopened){
                         scanned=0;String entry=findEntry(root,0);
