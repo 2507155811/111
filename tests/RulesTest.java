@@ -162,6 +162,19 @@ public class RulesTest {
         check(detected.executionLimit(3)==3,"explicit user limit respected");
         check(new BrowsePlan().executionLimit(0)==0,"empty selection has no executions");
         check(one.executionLimit(0)==1,"unknown counter contributes one detected attempt");
+        BrowsePlan returning=new BrowsePlan();returning.add(new BrowsePlan.Item("progress-v1:会场","会场(0/2) 浏览6秒 去完成"));
+        check(!NavigationRules.isTaskList("会场(1/2) 浏览6秒 去完成"),"single row needs approved evidence");
+        check(returning.recognizes("progress-v1:会场","会场(1/2) 浏览6秒 去完成"),"known single row identifies return without heading");
+        check(!returning.allows("progress-v1:会场","会场(1/2) 浏览6秒 去完成"),"return detection works before progress verification");
+        check(returning.confirmProgress("progress-v1:会场",TaskProgress.parse("会场(1/2) 浏览6秒 去完成")),"verify returned row");
+        check(returning.allows("progress-v1:会场","会场(1/2) 浏览6秒 去完成"),"verified return enables next repetition");
+        check(returning.recognizes("progress-v1:会场","会场(2/2) 浏览6秒 已完成"),"completed row still identifies return");
+        check(!returning.recognizes("progress-v1:陌生会场","陌生会场(1/2) 浏览6秒 去完成"),"unknown row is not return evidence");
+        check(!returning.recognizes("progress-v1:会场","会场(1/5) 浏览6秒 去完成"),"changed total not return evidence");
+        check(!returning.recognizes("progress-v1:会场","会场(1/2) 浏览30秒 去完成"),"changed duration not return evidence");
+        check(returning.recognizes("progress-v1:会场","会场(2/2) 已完成"),"completed row may hide duration");
+        check(!returning.recognizes("progress-v1:会场","会场(1/2) 去完成"),"active row missing duration not trusted");
+        check(!returning.recognizes("progress-v1:会场","会场(2/5) 已完成"),"completed row with changed total not trusted");
         System.out.println("PASS: "+count+" checks");
     }
 }

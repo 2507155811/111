@@ -27,6 +27,15 @@ public final class BrowsePlan {
     public void add(Item item){items.put(item.id,item);}
     public int total(){int sum=0;for(Item i:items.values())sum+=Math.max(0,i.remaining);return sum;}
     public int executionLimit(int requested){return requested>0?Math.min(requested,total()):total();}
+    /** Return detection accepts known rows even when their quota is exhausted. */
+    public boolean recognizes(String id,String row){
+        Item i=items.get(id);if(i==null)return false;
+        if(i.signature.equals(signature(row)))return true;
+        TaskProgress initial=TaskProgress.parse(i.row),after=TaskProgress.parse(row);
+        // Finished rows can hide their original duration and action button.
+        return initial!=null&&after!=null&&initial.name.equals(after.name)&&initial.total==after.total
+            &&TaskRules.seconds(row)<0&&TaskRules.rowCompleted(row);
+    }
     public boolean allows(String id,String row){Item i=items.get(id);if(i==null||skipped.contains(id)||!i.signature.equals(signature(row))||done.getOrDefault(id,0)>=i.remaining)return false;TaskProgress p=TaskProgress.parse(row);return i.initialProgress<0?p==null:p!=null&&p.current==i.initialProgress+done.getOrDefault(id,0);}
     public void confirmOne(String id){done.put(id,done.getOrDefault(id,0)+1);}
     /** Consume externally observed increments too, so the approved quota cannot grow. */

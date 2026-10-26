@@ -219,6 +219,11 @@ public class BrowseService extends AccessibilityService {
                 setStatus("已打开浏览任务，等待页面反馈…");
             }else if(phase==1){
                 long elapsed=now-taskSince;
+                // Apps may return automatically or the user may press BACK before our timer.
+                // A known row is stronger evidence than generic headings/button counts.
+                if(leftTaskList&&returnedToList(root,text)){
+                    phase=2;returnSince=now;setStatus("已返回已确认任务页，核对进度后自动继续…");return;
+                }
                 if(elapsed>90000){
                     if(isTaskList(text)){approved.skip(taskId);advance(now,"本项超时且已在列表，已跳过");return;}
                     if(performGlobalAction(GLOBAL_ACTION_BACK)){timedOut=true;phase=2;returnSince=now;backAttempts=1;setStatus("本项超时，返回列表后核对并继续下一项…");return;}
@@ -236,7 +241,7 @@ public class BrowseService extends AccessibilityService {
                 boolean timedCheck=leftTaskList&&timing.ready(expectedSeconds,now-browseSince,now)&&(!needsScroll||browseSwipes>0);
                 if(successHint||timedCheck){
                     // Some task pages update the list in place; do not close it with BACK.
-                    if(!isTaskList(text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
+                    if(!returnedToList(root,text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
                     phase=2;returnSince=now;backAttempts=1;setStatus(successHint?"检测到完成提示，返回核对进度…":"浏览计时结束，返回核对是否增加进度…");return;
                 }
                 if(leftTaskList&&needsScroll&&now-browseSince>=2500&&now-lastSwipe>=3500&&browseSwipes<6){
@@ -250,7 +255,7 @@ public class BrowseService extends AccessibilityService {
                 setStatus(seconds>=0?"页面倒计时 "+seconds+" 秒"+(needsScroll?" · 按提示滑动":" · 停留浏览"):"浏览中 "+(leftTaskList?(now-browseSince)/1000:0)+" 秒"+(needsScroll?" · 需要滑动":" · 未要求滑动")+"；等待完成反馈");
             }else if(phase==2){
                 if(now-returnSince<2000)return;
-                if(!isTaskList(text)){
+                if(!returnedToList(root,text)){
                     if(!reopened){
                         scanned=0;String entry=findEntry(root,0);
                         if(!entry.isEmpty()){
@@ -272,6 +277,31 @@ public class BrowseService extends AccessibilityService {
                 }else if(timedOut||now-returnSince>8000){approved.skip(taskId);advance(now,"已回到列表，但本项完成未确认，跳过且不计成功");}
             }
         }finally{root.recycle();}
+    }
+    private boolean returnedToList(AccessibilityNodeInfo root,String text){
+        if(isTaskList(text))return true;
+        confirmVisited=0;
+        return containsApprovedRow(root,0);
+    }
+    private boolean containsApprovedRow(AccessibilityNodeInfo n,int depth){
+        if(depth>45||++confirmVisited>2400||!n.isVisibleToUser())return false;
+        String t=label(n);
+        if(!TaskRows.action(t).isEmpty()||TaskRules.rowCompleted(t)||TaskProgress.containsCounter(t)){
+            AccessibilityNodeInfo row=AccessibilityNodeInfo.obtain(n);
+            for(int k=0;k<5&&row!=null;k++){
+                scanned=0;String text=flatten(row,0);TaskProgress p=TaskProgress.parse(text);
+                String id=p==null?key(text):p.identity();
+                boolean known=text.length()<220&&approved.recognizes(id,text)
+                    &&(p!=null||TaskRules.rowCompleted(text)||TaskRows.merged(text));
+                AccessibilityNodeInfo parent=row.getParent();row.recycle();row=parent;
+                if(known){if(row!=null)row.recycle();return true;}
+            }
+            if(row!=null)row.recycle();
+        }
+        for(int i=0;i<n.getChildCount();i++){
+            AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean known=containsApprovedRow(c,depth+1);c.recycle();if(known)return true;}
+        }
+        return false;
     }
     private boolean isTaskList(String text){return NavigationRules.isTaskList(text);}
     private String flatten(AccessibilityNodeInfo n,int depth){
@@ -313,7 +343,7 @@ public class BrowseService extends AccessibilityService {
         return null;
     }
     private boolean confirmedRow(AccessibilityNodeInfo n,String id,int depth){
-        if(depth>20||++confirmVisited>1600||!n.isVisibleToUser())return false;
+        if(depth>45||++confirmVisited>2400||!n.isVisibleToUser())return false;
         String t=label(n);
         if((activeProgress!=null&&t.replaceAll("\\s+","").contains(activeProgress.name))||TaskRules.rowCompleted(t)){
             AccessibilityNodeInfo row=AccessibilityNodeInfo.obtain(n);
