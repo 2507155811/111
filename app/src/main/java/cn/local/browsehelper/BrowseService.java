@@ -59,7 +59,7 @@ public class BrowseService extends AccessibilityService {
     private boolean previewing;
     private final Set<String> scanExcluded=new HashSet<>();
     private LinearLayout confirmOverlay;
-    private int previewChars,previewActions;
+    private int previewChars,previewActions,scanWindows;
     private final Runnable pulse=new Runnable(){public void run(){try{tick();}catch(RuntimeException e){pause("页面读取异常，请重新打开任务页");}if(running)handler.postDelayed(this,1000);}};
     @Override protected void onServiceConnected(){super.onServiceConnected();instance=this;}
     public String statusText(){return status;}
@@ -75,7 +75,7 @@ public class BrowseService extends AccessibilityService {
     @Override public void onDestroy(){dismiss();instance=null;super.onDestroy();}
     @Override public boolean onUnbind(Intent i){dismiss();instance=null;return super.onUnbind(i);}
     public boolean prepare(String pkg){
-        dismiss();target=pkg;attempted.clear();count=0;maxTasks=0;requestLimit=0;maxMinutes=20;learnedOnly=false;
+        dismiss();target=pkg;attempted.clear();approved=new BrowsePlan();count=0;maxTasks=0;requestLimit=0;maxMinutes=20;learnedOnly=false;
         try{android.content.pm.PackageInfo info=getPackageManager().getPackageInfo(pkg,0);version=String.valueOf(android.os.Build.VERSION.SDK_INT>=28?info.getLongVersionCode():info.versionCode);}catch(Exception e){return false;}
         overlay=new LinearLayout(this);overlay.setOrientation(1);overlay.setPadding(dp(12),dp(8),dp(12),dp(8));overlay.setBackgroundColor(Color.rgb(20,39,51));
         message=new TextView(this);message.setTextColor(Color.WHITE);message.setTextSize(12);overlay.addView(message,new LinearLayout.LayoutParams(-1,-2));
@@ -110,7 +110,7 @@ public class BrowseService extends AccessibilityService {
                 scanExcluded.add(c.key);items.add(new BrowsePlan.Item(c.key,c.rowText));c.node.recycle();
             }
         }finally{previewing=false;scanExcluded.clear();root.recycle();}
-        if(items.isEmpty()){setStatus("可执行浏览任务0 · 可读"+previewChars+"字 / 候选按钮"+previewActions+"个；请确认已打开任务面板，或重新开启无障碍服务");return;}
+        if(items.isEmpty()){setStatus("未识别到任务 · 检查京东/淘宝窗口"+scanWindows+"个 · 可读"+previewChars+"字 / 按钮"+previewActions+"个；若面板可见仍为0，请反馈此提示，可能未向无障碍开放任务文字");return;}
         showConfirmation(items);
     }
     private TextView panelText(String text,int size){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
@@ -304,17 +304,26 @@ public class BrowseService extends AccessibilityService {
         return false;
     }
     private boolean isTaskList(String text){return NavigationRules.isTaskList(text);}
-    private String flatten(AccessibilityNodeInfo n,int depth){
-        if(n==null||depth>45||++scanned>2400||!n.isVisibleToUser())return "";
-        StringBuilder s=new StringBuilder();CharSequence t=n.getText(),d=n.getContentDescription();if(t!=null)s.append(t).append(' ');if(d!=null&&(t==null||!d.toString().equals(t.toString())))s.append(d).append(' ');
-        if(TaskRows.merged(s.toString()))return s.toString();
-        for(int i=0;i<n.getChildCount()&&s.length()<18000;i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){s.append(flatten(c,depth+1));c.recycle();}}return s.toString();
+    private String flatten(AccessibilityNodeInfo n,int depth){return TaskRows.normalize(flattenRaw(n,depth));}
+    private String flattenRaw(AccessibilityNodeInfo n,int depth){
+        if(n==null||depth>45||++scanned>2400)return "";
+        StringBuilder s=new StringBuilder();CharSequence t=n.isVisibleToUser()?n.getText():null,d=n.isVisibleToUser()?n.getContentDescription():null;if(t!=null)s.append(t).append(' ');if(d!=null&&(t==null||!d.toString().equals(t.toString())))s.append(d).append(' ');
+        if(TaskRows.merged(s.toString()))return TaskRows.normalize(s.toString());
+        for(int i=0;i<n.getChildCount()&&s.length()<18000;i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){s.append(flattenRaw(c,depth+1));c.recycle();}}return s.toString();
     }
     private String label(AccessibilityNodeInfo n){CharSequence t=n.getText(),d=n.getContentDescription();String text=t==null?"":t.toString().trim(),desc=d==null?"":d.toString().trim();if(text.isEmpty())return desc;if(desc.isEmpty()||text.contains(desc))return text;if(desc.contains(text))return desc;return text+" "+desc;}
     private String key(String row){return row.replaceAll("去浏览|去完成|逛一逛|去逛逛|任务已完成|已完成|已领取|已达成|已浏览|明日再来|已打卡|完成|[0-9]+|\\s+","");}
     private Candidate find(AccessibilityNodeInfo n,int depth){
-        if(depth>45||++scanned>2400||!n.isVisibleToUser())return null;
-        String nodeLabel=label(n),button=TaskRows.action(nodeLabel);
+        if(depth>45||++scanned>2400)return null;
+        String nodeLabel=n.isVisibleToUser()?label(n):"",button=TaskRows.action(nodeLabel);
+        // Some buttons expose 去 / 完 / 成 only in separate child nodes.
+        if(button.isEmpty()&&n.isVisibleToUser()&&n.getChildCount()>0){
+            Rect bounds=new Rect();n.getBoundsInScreen(bounds);
+            if(bounds.width()<=dp(260)&&bounds.height()<=dp(100)){
+                int saved=scanned;scanned=0;String combined=flatten(n,0);scanned=saved;
+                if(!TaskRows.action(combined).isEmpty()){nodeLabel=combined;button=TaskRows.action(combined);}
+            }
+        }
         boolean merged=TaskRows.merged(nodeLabel);
         if(!button.isEmpty()){
             AccessibilityNodeInfo row=merged?AccessibilityNodeInfo.obtain(n):n.getParent();
@@ -383,15 +392,29 @@ public class BrowseService extends AccessibilityService {
     }
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private AccessibilityNodeInfo applicationRoot(){
-        AccessibilityNodeInfo active=getRootInActiveWindow();
-        if(active!=null){String p=String.valueOf(active.getPackageName());if(!p.equals(getPackageName()))return active;active.recycle();}
-        List<AccessibilityWindowInfo> windows=getWindows();AccessibilityNodeInfo result=null;
-        for(AccessibilityWindowInfo w:windows){
-            if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION&&(w.isActive()||w.isFocused())){
+        AccessibilityNodeInfo active=getRootInActiveWindow();scanWindows=0;
+        // Never select a background JD/Taobao window while another app is foreground.
+        if(active!=null){String p=String.valueOf(active.getPackageName());
+            if(!p.equals(getPackageName())&&!p.equals(target))return active;
+        }
+        AccessibilityNodeInfo result=null;int best=-1,bestLayer=Integer.MIN_VALUE;
+        for(AccessibilityWindowInfo w:getWindows()){
+            if(w.getType()==AccessibilityWindowInfo.TYPE_APPLICATION){
                 AccessibilityNodeInfo r=w.getRoot();
-                if(r!=null){if(result==null&&target.equals(String.valueOf(r.getPackageName())))result=r;else r.recycle();}
-            }w.recycle();
-        }return result;
+                if(r!=null){
+                    if(target.equals(String.valueOf(r.getPackageName()))){
+                        scanWindows++;int saved=scanned;scanned=0;String text=flatten(r,0);scanned=saved;
+                        int score=TaskRows.actionCount(text)*10+(text.contains("浏览")?1:0);
+                        if(score>best||(score==best&&w.getLayer()>bestLayer)){
+                            if(result!=null)result.recycle();result=r;best=score;bestLayer=w.getLayer();
+                        }else r.recycle();
+                    }else r.recycle();
+                }
+            }
+            w.recycle();
+        }
+        if(result!=null){if(active!=null)active.recycle();return result;}
+        return active;
     }
     private boolean tap(Rect r){
         if(r==null||r.isEmpty()||overlapsOverlay(r))return false;

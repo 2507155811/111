@@ -175,6 +175,20 @@ public class RulesTest {
         check(returning.recognizes("progress-v1:会场","会场(2/2) 已完成"),"completed row may hide duration");
         check(!returning.recognizes("progress-v1:会场","会场(1/2) 去完成"),"active row missing duration not trusted");
         check(!returning.recognizes("progress-v1:会场","会场(2/5) 已完成"),"completed row with changed total not trusted");
+        for(String button:new String[]{"去 完 成","去\n完\n成","去\u00a0完\u00a0成","去\u200b完\u200d成","去完成 按钮"}){
+            check(TaskRows.action(button).equals("去完成"),"JD spaced/split button "+button);
+            check(TaskRows.actionCount(button)==1,"normalized diagnostic button count");
+        }
+        String jdRows="";
+        for(String name:new String[]{"福利","精选","推荐","好物"}){
+            String row=TaskRows.normalize("浏 览 ６ 秒 "+name+" 页 面 去 完 成");
+            check(TaskRules.isBrowseTask(row,TaskRows.action(row)),"JD screenshot row "+name);
+            check(TaskRules.seconds(row)==6,"JD normalized duration "+name);
+            jdRows+=row;
+        }
+        check(TaskRows.actionCount(jdRows)==4,"JD screenshot four buttons");
+        check(TaskRows.action(jdRows).isEmpty(),"whole panel never one action");
+        check(TaskRows.action("浏览 6 秒 并 下 单 去 完 成").isEmpty(),"normalization preserves mixed action rejection");
         System.out.println("PASS: "+count+" checks");
     }
 }
