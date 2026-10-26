@@ -247,6 +247,34 @@ public class RulesTest {
         check(last.confirmedAfter("好物随心逛 去完成")==null,"action button is not success");
         check(last.confirmedAfter("好物随心逛 已完成 其他任务 去完成")==null,"multirow text cannot confirm counterless completion");
         check(last.confirmedAfter("好物随心逛 浏览15秒 已完成 +400")!=null,"exact completed row with duration and reward");
+        String narrow="浏览15秒 +400 去完成";
+        String fullA="好物随心逛(0/10) 浏览15秒 +400 去完成";
+        String fullB="好物沉浸看(1/10) 浏览15秒 +400 去完成";
+        String chosenA=TaskRows.chooseRow(narrow,fullA),chosenB=TaskRows.chooseRow(narrow,fullB);
+        check(chosenA.equals(TaskRows.normalize(fullA)),"complete parent replaces description-only row");
+        check(chosenB.equals(TaskRows.normalize(fullB)),"second complete task keeps separate identity");
+        TaskProgress pa=TaskProgress.parse(chosenA),pb=TaskProgress.parse(chosenB);
+        check(pa!=null&&pb!=null&&!pa.identity().equals(pb.identity()),"identical descriptions do not merge tasks");
+        BrowsePlan screenshotPlan=new BrowsePlan();screenshotPlan.add(new BrowsePlan.Item(pa.identity(),chosenA));screenshotPlan.add(new BrowsePlan.Item(pb.identity(),chosenB));
+        check(screenshotPlan.total()==19&&screenshotPlan.pendingCount()==19,"screenshot remaining counts are nineteen not two");
+        check(TaskRows.chooseRow(chosenA,fullA+fullB).equals(chosenA),"whole task list never replaces one row");
+        String searchParent=TaskRows.chooseRow(narrow,"搜一搜你心仪的宝贝(2/5) 浏览15秒 +400 去完成");
+        check(!TaskRules.isBrowseTask(searchParent,"去完成"),"full context prevents description-only authorization of unsupported search");
+        screenshotPlan.skip(pa.identity());
+        check(screenshotPlan.allows(pb.identity(),chosenB),"one unverified task does not block a different task");
+        check(screenshotPlan.pendingCount()==9,"skipped quota distinct from pending quota");
+        BrowsePlan refreshed=new BrowsePlan();
+        refreshed.add(new BrowsePlan.Item(pa.identity(),chosenA));refreshed.add(new BrowsePlan.Item(pb.identity(),chosenB));
+        check(refreshed.refreshObserved(new BrowsePlan.Item(pa.identity(),"好物随心逛(2/10) 浏览15秒 +400 去完成"),true),"refresh accepts actual forward list progress");
+        check(refreshed.pendingCount()==17,"remaining count updates from nineteen to seventeen");
+        check(refreshed.allows(pa.identity(),"好物随心逛(2/10) 浏览15秒 +400 去完成"),"next execution uses refreshed counter");
+        check(!refreshed.refreshObserved(new BrowsePlan.Item(pa.identity(),chosenA),true),"refresh never replays old progress");
+        refreshed.exclude("unchecked-new");
+        check(!refreshed.refreshObserved(new BrowsePlan.Item("unchecked-new","浏览6秒精选页面 去完成"),true),"refresh preserves canceled selection");
+        check(refreshed.refreshObserved(new BrowsePlan.Item("new-visible","浏览6秒精选页面 去完成"),true),"new visible task updates dynamic list");
+        check(refreshed.pendingCount()==18,"new task updates remaining count");
+        check(refreshed.retryOnce(pa.identity()),"one unverified attempt may retry");
+        check(!refreshed.retryOnce(pa.identity()),"retry remains bounded");
         System.out.println("PASS: "+count+" checks");
     }
 }

@@ -25,8 +25,25 @@ public final class BrowsePlan {
     private final Map<String,Integer> done=new HashMap<>();
     private final Set<String> skipped=new HashSet<>();
     private final Set<String> excluded=new HashSet<>();
+    private final Set<String> retried=new HashSet<>();
     public void add(Item item){items.put(item.id,item);}
     public void exclude(String id){excluded.add(id);}
+    public boolean contains(String id){return items.containsKey(id);}
+    public Set<String> excludedIds(){return new HashSet<>(excluded);}
+    public boolean retryOnce(String id){return items.containsKey(id)&&!skipped.contains(id)&&retried.add(id);}
+    /** Refresh observed list progress without crediting unverified actions as successes. */
+    public boolean refreshObserved(Item observed,boolean allowNew){
+        Item old=items.get(observed.id);
+        if(old==null)return addDiscovered(observed,allowNew);
+        if(excluded.contains(observed.id)||!old.signature.equals(observed.signature))return false;
+        TaskProgress p=TaskProgress.parse(observed.row);
+        if(p!=null){
+            int consumed=p.current-old.initialProgress;
+            if(consumed<done.getOrDefault(old.id,0)||consumed>old.remaining)return false;
+            if(consumed>done.getOrDefault(old.id,0)){done.put(old.id,consumed);skipped.remove(old.id);}
+        }
+        return allows(observed.id,observed.row);
+    }
     public Set<String> knownIds(){Set<String> ids=new HashSet<>(items.keySet());ids.addAll(excluded);return ids;}
     /** Only opt-in pure browsing may extend a running plan. Never reset existing quotas. */
     public boolean addDiscovered(Item item,boolean enabled){
@@ -36,6 +53,7 @@ public final class BrowsePlan {
         items.put(item.id,item);return true;
     }
     public int total(){int sum=0;for(Item i:items.values())sum+=Math.max(0,i.remaining);return sum;}
+    public int pendingCount(){int n=0;for(Item i:items.values())if(!skipped.contains(i.id))n+=Math.max(0,i.remaining-done.getOrDefault(i.id,0));return n;}
     public int executionLimit(int requested){return requested>0?Math.min(requested,total()):total();}
     /** Return detection accepts known rows even when their quota is exhausted. */
     public boolean recognizes(String id,String row){

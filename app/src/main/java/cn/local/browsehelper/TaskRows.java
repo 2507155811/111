@@ -16,6 +16,13 @@ public final class TaskRows {
         if(t.length()>220||!TaskRules.hasBrowseIntent(t)||actionCount(t)!=1)return "";
         for(String b:BUTTONS)if(t.contains(b)&&TaskRules.isBrowseTask(t,b))return b;return "";
     }
+    /** Prefer complete single-task context over a description/button-only subtree. */
+    public static String chooseRow(String current,String ancestor){
+        String text=normalize(ancestor);
+        if(text.length()>220||actionCount(text)!=1)return current;
+        if(!current.isEmpty()&&TaskProgress.parse(current)!=null)return current;
+        return text.length()>=current.length()?text:current;
+    }
     public static boolean merged(String label){String action=action(label);return !action.isEmpty()&&TaskRules.hasBrowseIntent(normalize(label));}
     public static int actionCount(String text){text=normalize(text);if(TaskRules.isLiveVisit(text))text=text.substring(3);int total=0;for(String b:BUTTONS){int p=0;while((p=text.indexOf(b,p))>=0){total++;p+=b.length();}}return total;}
     private TaskRows(){}
