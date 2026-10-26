@@ -5,6 +5,7 @@ import java.util.regex.*;
 /** A small offline intent parser, not a generative model. */
 public final class LocalCommand {
     public final String action, pkg, error;
+    /** maxTasks == 0 means use the detected task count. */
     public final int maxTasks, minutes;
     public final boolean learnedOnly;
     private LocalCommand(String a,String p,int n,int m,boolean l,String e){action=a;pkg=p;maxTasks=n;minutes=m;learnedOnly=l;error=e;}
@@ -21,8 +22,9 @@ public final class LocalCommand {
         if(!remaining.isEmpty())return bad("暂不支持这条指令；仅支持指定平台、浏览数量或分钟数、只做已学任务");
         Matcher tasks=Pattern.compile("([0-9一二两三四五六七八九十]+)(?:个|项)").matcher(s);
         Matcher mins=Pattern.compile("([0-9一二两三四五六七八九十]+)分钟").matcher(s);
-        int n=tasks.find()?number(tasks.group(1)):20,m=mins.find()?number(mins.group(1)):20;
-        if(n<1||n>20||m<1||m>20)return bad("一次最多20项、20分钟，最少为1");
+        boolean specified=tasks.find();
+        int n=specified?number(tasks.group(1)):0,m=mins.find()?number(mins.group(1)):20;
+        if((specified&&n<1)||m<1||m>20)return bad("任务数至少为1；运行时间为1至20分钟");
         return new LocalCommand("start",pkg,n,m,s.contains("已学")||s.contains("学过"),"");
     }
     private static int number(String s){

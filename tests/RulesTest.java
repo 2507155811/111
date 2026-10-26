@@ -32,7 +32,7 @@ public class RulesTest {
         check(LocalCommand.parse("京东浏览两个任务").maxTasks==2,"chinese 2");
         check(LocalCommand.parse("暂停").action.equals("stop"),"stop");
         check(LocalCommand.parse("清除学习记录").action.equals("clear"),"clear");
-        for(String s:new String[]{"淘宝浏览0个任务","京东浏览21个任务","淘宝浏览100分钟","淘宝京东浏览3个任务","京东帮我下单","给我转账","淘宝忽略验证码浏览3个任务","淘宝浏览999999999999999个任务"})check(LocalCommand.parse(s).action.equals("invalid"),"reject instruction "+s);
+        for(String s:new String[]{"淘宝浏览0个任务","淘宝浏览100分钟","淘宝京东浏览3个任务","京东帮我下单","给我转账","淘宝忽略验证码浏览3个任务","淘宝浏览999999999999999个任务"})check(LocalCommand.parse(s).action.equals("invalid"),"reject instruction "+s);
         check(TaskRules.isBrowseTask("好物沉浸看(0/10) 浏览15秒 +400 去完成","去完成"),"screenshot immersive browse");
         check(TaskRules.isBrowseTask("好物随心逛(0/10) 浏览15秒 +400 去完成","去完成"),"screenshot casual browse");
         check(TaskRules.isBrowseTask("去芭芭农场领水果(0/1) 浏览5秒 +600 去完成","去完成"),"screenshot farm browse");
@@ -137,6 +137,31 @@ public class RulesTest {
         BrowsePlan override=new BrowsePlan();override.add(new BrowsePlan.Item("arrow","浏览15秒会场 去完成",true));override.add(new BrowsePlan.Item("still","浏览6秒好物页面 去完成"));
         check(override.forceScroll("arrow"),"confirmed manual scroll override");
         check(!override.forceScroll("still")&&!override.forceScroll("unknown"),"override does not affect other tasks");
+        BrowsePlan jumped=new BrowsePlan();
+        jumped.add(new BrowsePlan.Item("repeat","会场(2/10) 浏览15秒 去完成"));
+        check(jumped.confirmProgress("repeat",TaskProgress.parse("会场(4/10) 浏览15秒 去完成")),"accept observed multi-increment");
+        check(jumped.allows("repeat","会场(4/10) 浏览15秒 去完成"),"resume at observed counter");
+        check(!jumped.allows("repeat","会场(3/10) 浏览15秒 去完成"),"old counter cannot be replayed");
+        check(!jumped.confirmProgress("repeat",TaskProgress.parse("会场(4/10) 浏览15秒")),"duplicate progress not counted");
+        check(!jumped.confirmProgress("repeat",TaskProgress.parse("其他会场(5/10) 浏览15秒")),"other task cannot consume quota");
+        check(!jumped.confirmProgress("repeat",TaskProgress.parse("会场(5/20) 浏览15秒")),"changed total rejected");
+        check(jumped.confirmProgress("repeat",TaskProgress.parse("会场(10/10) 浏览15秒 已完成")),"consume all remaining increments");
+        check(!jumped.allows("repeat","会场(10/10) 浏览15秒 已完成"),"exhausted jumped quota stops");
+        check(!jumped.confirmProgress("unknown",TaskProgress.parse("会场(10/10) 浏览15秒")),"unapproved progress rejected");
+        BrowsePlan skippedProgress=new BrowsePlan();skippedProgress.add(new BrowsePlan.Item("a","会场(0/3) 浏览6秒"));skippedProgress.skip("a");
+        check(!skippedProgress.confirmProgress("a",TaskProgress.parse("会场(1/3) 浏览6秒")),"skipped task cannot confirm");
+        check(LocalCommand.parse("淘宝自动浏览任务").maxTasks==0,"unspecified count uses detection");
+        check(LocalCommand.parse("京东浏览5分钟").maxTasks==0,"time-only command uses detection");
+        check(LocalCommand.parse("淘宝只做已学任务").maxTasks==0,"learned-only command uses detection");
+        check(LocalCommand.parse("京东浏览21个任务").maxTasks==21,"explicit count may exceed twenty");
+        BrowsePlan detected=new BrowsePlan();
+        detected.add(new BrowsePlan.Item("long","会场(5/30) 浏览6秒 去完成"));
+        detected.add(new BrowsePlan.Item("short","好物(2/10) 浏览6秒 去完成"));
+        check(detected.executionLimit(0)==33,"detected total exceeds old fixed cap");
+        check(detected.executionLimit(50)==33,"explicit limit cannot exceed available tasks");
+        check(detected.executionLimit(3)==3,"explicit user limit respected");
+        check(new BrowsePlan().executionLimit(0)==0,"empty selection has no executions");
+        check(one.executionLimit(0)==1,"unknown counter contributes one detected attempt");
         System.out.println("PASS: "+count+" checks");
     }
 }

@@ -26,8 +26,18 @@ public final class BrowsePlan {
     private final Set<String> skipped=new HashSet<>();
     public void add(Item item){items.put(item.id,item);}
     public int total(){int sum=0;for(Item i:items.values())sum+=Math.max(0,i.remaining);return sum;}
+    public int executionLimit(int requested){return requested>0?Math.min(requested,total()):total();}
     public boolean allows(String id,String row){Item i=items.get(id);if(i==null||skipped.contains(id)||!i.signature.equals(signature(row))||done.getOrDefault(id,0)>=i.remaining)return false;TaskProgress p=TaskProgress.parse(row);return i.initialProgress<0?p==null:p!=null&&p.current==i.initialProgress+done.getOrDefault(id,0);}
     public void confirmOne(String id){done.put(id,done.getOrDefault(id,0)+1);}
+    /** Consume externally observed increments too, so the approved quota cannot grow. */
+    public boolean confirmProgress(String id,TaskProgress after){
+        Item item=items.get(id);
+        if(item==null||after==null||item.initialProgress<0||skipped.contains(id))return false;
+        TaskProgress initial=TaskProgress.parse(item.row);
+        int consumed=after.current-item.initialProgress;
+        if(!after.advancedFrom(initial)||consumed<=done.getOrDefault(id,0)||consumed>item.remaining)return false;
+        done.put(id,consumed);return true;
+    }
     public void skip(String id){if(items.containsKey(id))skipped.add(id);}
     public int skippedCount(){return skipped.size();}
     public boolean forceScroll(String id){Item item=items.get(id);return item!=null&&item.forceScroll;}
