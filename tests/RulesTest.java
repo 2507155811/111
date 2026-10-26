@@ -275,6 +275,21 @@ public class RulesTest {
         check(refreshed.pendingCount()==18,"new task updates remaining count");
         check(refreshed.retryOnce(pa.identity()),"one unverified attempt may retry");
         check(!refreshed.retryOnce(pa.identity()),"retry remains bounded");
+        check(BrowseScroll.fallback(true,true,false,2500),"unreadable arrow can use opted-in slow-swipe fallback");
+        check(!BrowseScroll.fallback(false,true,false,10000),"disabled fallback never scrolls implicitly");
+        check(!BrowseScroll.fallback(true,false,false,10000),"fallback never scrolls task list");
+        check(!BrowseScroll.fallback(true,true,true,10000),"explicit no-scroll overrides fallback");
+        check(!BrowseScroll.fallback(true,true,false,2499),"fallback waits for browsing page to settle");
+        for(String noScroll:new String[]{"无需滑动","不需要手动上滑","不要上下滑动","禁止滚动页面"})
+            check(BrowseTiming.forbidsScroll(noScroll),"honor explicit no scrolling "+noScroll);
+        check(!BrowseTiming.forbidsScroll("请上下滑动浏览15秒"),"positive prompt does not disable scrolling");
+        BrowsePlan continueAfterMiss=new BrowsePlan();
+        continueAfterMiss.add(new BrowsePlan.Item("miss","漏读提示任务(0/2) 浏览15秒 去完成"));
+        continueAfterMiss.add(new BrowsePlan.Item("other","其他任务(0/1) 浏览6秒 去完成"));
+        check(continueAfterMiss.retryOnce("miss"),"unverified item can be deferred once");
+        check(continueAfterMiss.allows("other","其他任务(0/1) 浏览6秒 去完成"),"missing swipe hint does not disable next task");
+        continueAfterMiss.skip("miss");
+        check(continueAfterMiss.allows("other","其他任务(0/1) 浏览6秒 去完成"),"second failure still allows other task");
         System.out.println("PASS: "+count+" checks");
     }
 }

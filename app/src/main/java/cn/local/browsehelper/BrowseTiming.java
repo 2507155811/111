@@ -9,6 +9,10 @@ public final class BrowseTiming {
     private int previous=-1;
     private long deadline;
     private static final String SCROLL="上下滑动|上下滑|向上滑动|向下滑动|向上滑|向下滑|往上滑|往下滑|向上划|向下划|往上划|往下划|上划|下划|滑一滑|滑一下|上下浏览|划动|上滑|下滑|滑屏|滑动|滚动(?:页面|屏幕|浏览)|滚一滚|上下拖动|向上拖动|向下拖动|(?:上拉|下拉)浏览|滑到(?:页面)?底部";
+    public static boolean forbidsScroll(String text){
+        String clean=TaskRows.normalize(text);
+        return Pattern.compile("(?:无需|不用|不必|不需要|不要|禁止|不能)(?:再|手动|进行)*(?:"+SCROLL+")").matcher(clean).find();
+    }
     public static boolean requiresScroll(String text){
         String clean=java.text.Normalizer.normalize(text,java.text.Normalizer.Form.NFKC).replaceAll("\\s+","");
         String affirmative=clean.replaceAll("(?:无需|不用|不必|不需要|不要|禁止|不能)(?:再|手动|进行)*(?:"+SCROLL+")","");

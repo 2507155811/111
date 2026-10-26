@@ -46,6 +46,8 @@ public class BrowseService extends AccessibilityService {
     private int requestLimit=0;
     private boolean learnedOnly;
     private boolean autoDiscover;
+    private boolean fallbackScroll=true,scrollForbidden;
+    private final Set<String> retryScroll=new HashSet<>();
     private String refreshedText="";
     private int visibleKinds,visibleRemaining;
     private String activeAttempt="";
@@ -82,7 +84,7 @@ public class BrowseService extends AccessibilityService {
     @Override public void onDestroy(){dismiss();instance=null;super.onDestroy();}
     @Override public boolean onUnbind(Intent i){dismiss();instance=null;return super.onUnbind(i);}
     public boolean prepare(String pkg){
-        dismiss();target=pkg;attempted.clear();approved=new BrowsePlan();visibleKinds=0;visibleRemaining=0;count=0;maxTasks=0;requestLimit=0;maxMinutes=20;learnedOnly=false;
+        dismiss();target=pkg;attempted.clear();retryScroll.clear();approved=new BrowsePlan();visibleKinds=0;visibleRemaining=0;count=0;maxTasks=0;requestLimit=0;maxMinutes=20;learnedOnly=false;
         try{android.content.pm.PackageInfo info=getPackageManager().getPackageInfo(pkg,0);version=String.valueOf(android.os.Build.VERSION.SDK_INT>=28?info.getLongVersionCode():info.versionCode);}catch(Exception e){return false;}
         overlay=new LinearLayout(this);overlay.setOrientation(1);overlay.setPadding(dp(12),dp(8),dp(12),dp(8));overlay.setBackgroundColor(Color.rgb(20,39,51));
         message=new TextView(this);message.setTextColor(Color.WHITE);message.setTextSize(12);overlay.addView(message,new LinearLayout.LayoutParams(-1,-2));
@@ -138,6 +140,8 @@ public class BrowseService extends AccessibilityService {
         TextView limitText=panelText("",14);confirmOverlay.addView(limitText);
         CheckBox discover=new CheckBox(this);discover.setTextColor(Color.WHITE);discover.setTextSize(12);
         discover.setText("返回后自动检测并继续后续纯浏览任务（排除取消勾选项）");discover.setChecked(true);confirmOverlay.addView(discover);
+        CheckBox fallback=new CheckBox(this);fallback.setTextColor(Color.WHITE);fallback.setTextSize(12);
+        fallback.setText("漏读滑动/箭头提示时自动尝试慢滑（无需滑动的页面除外）");fallback.setChecked(true);confirmOverlay.addView(fallback);
         Button go=new Button(this);go.setText("确认并开始浏览任务");confirmOverlay.addView(go);
         Runnable update=()->{
             int kinds=0,times=0;
@@ -157,7 +161,7 @@ public class BrowseService extends AccessibilityService {
                 getSharedPreferences("scroll-overrides",0).edit().putBoolean(learnKey(item.id),force).apply();
             }
             for(int i=0;i<checks.size();i++)if(!checks.get(i).isChecked())selected.exclude(items.get(i).id);
-            autoDiscover=discover.isChecked();
+            autoDiscover=discover.isChecked();fallbackScroll=fallback.isChecked();
             int wanted=selected.executionLimit(requestLimit);closeConfirmation();
             // Let focus return to the target app before re-reading it.
             handler.postDelayed(()->{try{validateAndStart(selected,chosen,wanted);}catch(RuntimeException e){pause("确认检查异常："+e.getClass().getSimpleName()+"；未开始任务");}},450);
@@ -242,7 +246,7 @@ public class BrowseService extends AccessibilityService {
                     return;
                 }
                 before=text;taskId=c.key;activeAttempt=c.attempt;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;timedOut=false;
-                timing=new BrowseTiming();needsScroll=approved.forceScroll(taskId)||getSharedPreferences("scroll-overrides",0).getBoolean(learnKey(taskId),false)||BrowseTiming.requiresScroll(c.rowText);
+                timing=new BrowseTiming();scrollForbidden=BrowseTiming.forbidsScroll(c.rowText);needsScroll=retryScroll.contains(taskId)||approved.forceScroll(taskId)||getSharedPreferences("scroll-overrides",0).getBoolean(learnKey(taskId),false)||BrowseTiming.requiresScroll(c.rowText);
                 boolean clicked=c.node.performAction(AccessibilityNodeInfo.ACTION_CLICK);c.node.recycle();
                 if(!clicked){clicked=tap(taskButton);clickFallbackUsed=true;}
                 if(!clicked){approved.skip(taskId);advance(now,"本项按钮无法点击，已跳过");return;}
@@ -260,12 +264,22 @@ public class BrowseService extends AccessibilityService {
                     pause("本项超时且无法返回，已停止");return;
                 }
                 if(!leftTaskList&&elapsed>1500&&!isTaskList(text)&&!text.equals(before)){leftTaskList=true;browseSince=now;}
-                if(leftTaskList){timing.observe(text,now);needsScroll=needsScroll||BrowseTiming.requiresScroll(text);if(!needsScroll){scanned=0;needsScroll=scanScrollPrompts(root,0);}}
+                if(leftTaskList){
+                    timing.observe(text,now);scrollForbidden=scrollForbidden||BrowseTiming.forbidsScroll(text);
+                    needsScroll=needsScroll||BrowseTiming.requiresScroll(text);
+                    if(!needsScroll){scanned=0;needsScroll=scanScrollPrompts(root,0);}
+                    if(BrowseScroll.fallback(fallbackScroll,leftTaskList,scrollForbidden,now-browseSince))needsScroll=true;
+                    if(scrollForbidden)needsScroll=false;
+                }
                 if(!leftTaskList&&elapsed>=4000&&!clickFallbackUsed&&text.equals(before)){
                     clickFallbackUsed=true;
                     if(tap(taskButton)){setStatus("网页按钮未跳转，尝试点击已识别的按钮位置…");return;}
                 }
-                if(!leftTaskList&&elapsed>12000){pause("按钮点击后未确认进入任务；请检查是否有遮挡或页面文字不可读");return;}
+                if(!leftTaskList&&elapsed>12000){
+                    if(returnedToList(root,text)){approved.skip(taskId);advance(now,"本项未确认进入浏览页，暂缓并继续其他任务");}
+                    else pause("未确认进入任务或返回列表，请检查当前页面");
+                    return;
+                }
                 // A pre-existing success label in the task list must not count as success.
                 boolean successHint=elapsed>=3000&&!text.equals(before)&&TaskRules.newCompletion(text,before);
                 boolean timedCheck=leftTaskList&&timing.ready(expectedSeconds,now-browseSince,now)&&(!needsScroll||browseSwipes>0);
@@ -304,9 +318,10 @@ public class BrowseService extends AccessibilityService {
                     else if(!approved.confirmProgress(taskId,verifiedProgress)){pause("任务进度变化异常，请重新扫描确认");return;}
                     getSharedPreferences("learned",0).edit().putBoolean(learnKey(taskId),true).apply();
                     count++;advance(now,"已核对完成并记住任务");
-                }else if(timedOut||now-returnSince>12000){
+                }else if(timedOut||now-returnSince>3000){
                     if(!timedOut&&approved.retryOnce(taskId)){
-                        attempted.remove(activeAttempt);advance(now,"完成暂未核对到，先做其他任务；本项最多复试一次，不计成功");
+                        if(fallbackScroll&&!scrollForbidden)retryScroll.add(taskId);
+                        attempted.remove(activeAttempt);advance(now,"完成暂未核对到，先做下一项；本项最多复试一次，不计成功");
                     }else{approved.skip(taskId);advance(now,"本项仍未确认，暂缓且不计成功，继续其他任务");}
                 }
             }

@@ -47,7 +47,7 @@ public class MainActivity extends Activity {
         button("停止并关闭控制条",()->{if(BrowseService.instance!=null)BrowseService.instance.dismiss();refresh();},false);
         text("适配说明",17,ink,8);
         text("面向小米 17 Pro Max / HyperOS，安卓 8.0 以上。没有手机实测，尚不能保证兼容当前双11活动。若服务被系统停止，可检查应用电池设置和后台运行权限；不要关闭系统安全保护。",13,muted,20);
-        text("版本 0.15.0 · 修复任务行混淆与过早结束",12,muted,0);
+        text("版本 0.16.0 · 滑动漏检补救与自动继续",12,muted,0);
     }
     @Override public void onResume(){super.onResume();refresh();}
     private void refresh(){if(status!=null)status.setText(BrowseService.instance==null?"● 无障碍服务尚未连接":"● 服务已连接 · "+BrowseService.instance.statusText());if(learned!=null)learned.setText("已学会 "+getSharedPreferences("learned",0).getAll().size()+" 种任务特征 · 仅保存在本机");}
