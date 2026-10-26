@@ -17,6 +17,15 @@ public final class TaskProgress {
         if(name.isEmpty()||name.length()>96||t<1||t>100||c>t||m.find())return null;
         return new TaskProgress(name,c,t,TaskRules.seconds(row));
     }
+    /** Completed rows may remove the original counter; require the exact known title. */
+    public TaskProgress confirmedAfter(String row){
+        String clean=TaskRows.normalize(row);TaskProgress after=parse(clean);
+        if(after!=null)return after.advancedFrom(this)?after:null;
+        if(containsCounter(clean)||!clean.startsWith(name))return null;
+        String suffix=clean.substring(name.length());
+        if(!suffix.matches("(?:(?:浏览|停留)[0-9]{1,2}秒)?(?:已完成|已达成|已浏览|已打卡)(?:[+＋]?[0-9]+步?)?"))return null;
+        return new TaskProgress(name,total,total,seconds);
+    }
     public boolean incomplete(){return current<total;}
     public static boolean containsCounter(String row){return COUNTER.matcher(row).find();}
     public boolean advancedFrom(TaskProgress previous){return previous!=null&&name.equals(previous.name)&&total==previous.total&&current>previous.current;}

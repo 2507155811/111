@@ -236,6 +236,17 @@ public class RulesTest {
         check(!TaskRules.readyToVerify(-1,30000,true),"no guessed wait duration for live task");
         check(livePlan.confirmProgress("live",TaskProgress.parse("逛一逛胡可直播间(1/1) 已完成")),"live task requires returned progress");
         check(!livePlan.allows("live",liveRow),"finished live task cannot repeat");
+        check(TaskRules.isBrowseTask("去签到领红包(0/1) 浏览5秒 +600 去完成","去完成"),"screenshot timed sign-in page visit");
+        check(!TaskRules.isBrowseTask("去签到领红包(0/1) 完成签到 去完成","去完成"),"actual sign-in action not inferred");
+        check(!TaskRules.isBrowseTask("去签到领红包(0/1) 浏览5秒并关注 去完成","去完成"),"timed title does not bypass mixed-action rejection");
+        TaskProgress last=TaskProgress.parse("好物随心逛(9/10) 浏览15秒 去完成");
+        TaskProgress finished=last.confirmedAfter("好物随心逛 已完成");
+        check(finished!=null&&finished.current==10&&finished.total==10,"counterless exact row confirms final completion");
+        check(last.confirmedAfter("好物随心逛特别版 已完成")==null,"similar title is not completion evidence");
+        check(last.confirmedAfter("好物随心逛(9/10) 已完成")==null,"unchanged counter overrides completion label");
+        check(last.confirmedAfter("好物随心逛 去完成")==null,"action button is not success");
+        check(last.confirmedAfter("好物随心逛 已完成 其他任务 去完成")==null,"multirow text cannot confirm counterless completion");
+        check(last.confirmedAfter("好物随心逛 浏览15秒 已完成 +400")!=null,"exact completed row with duration and reward");
         System.out.println("PASS: "+count+" checks");
     }
 }

@@ -14,6 +14,9 @@ public final class TaskRules {
         if (row == null || button == null || row.length() > 220) return false;
         // Only the explicit visit title permits 直播间; other blocked actions still reject the row.
         String checked=isLiveVisit(row)?row.replaceFirst("直播间",""):row;
+        // This title describes a timed page visit; never click a destination sign-in control.
+        if(checked.startsWith("去签到领红包")&&Pattern.compile("浏览[0-9]{1,2}秒").matcher(checked).find())
+            checked=checked.replaceFirst("^去签到领红包","");
         if(BLOCK.matcher(checked).find())return false;
         boolean action = button.equals("去浏览") || button.equals("去完成") || button.equals("逛一逛") || button.equals("去逛逛");
         TaskProgress progress=TaskProgress.parse(row);
