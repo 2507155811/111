@@ -37,6 +37,7 @@ public class BrowseService extends AccessibilityService {
     private long since, taskSince, returnSince;
     private long runSince;
     private long browseSince;
+    private long unreadableSince;
     private long lastSwipe;
     private int browseSwipes, backAttempts;
     private boolean clickFallbackUsed;
@@ -44,6 +45,8 @@ public class BrowseService extends AccessibilityService {
     private int maxTasks=0, maxMinutes=20;
     private int requestLimit=0;
     private boolean learnedOnly;
+    private boolean autoDiscover;
+    private long nextDiscoveryAt;
     private String version="";
     private LinearLayout overlay;
     private TextView message;
@@ -118,7 +121,7 @@ public class BrowseService extends AccessibilityService {
         confirmOverlay=new LinearLayout(this);confirmOverlay.setOrientation(1);confirmOverlay.setPadding(dp(18),dp(14),dp(18),dp(14));confirmOverlay.setBackgroundColor(Color.rgb(20,39,51));
         confirmOverlay.addView(panelText("确认浏览任务",21));
         confirmOverlay.addView(panelText("连续执行已开启：完成后返回并自动下一个，无需逐项点击开始。",13));
-        confirmOverlay.addView(panelText("仅统计当前可见页面，非活动全部任务。只执行勾选项；新出现的任务需重新确认。",13));
+        confirmOverlay.addView(panelText("仅统计当前可见页面，非活动全部任务。任务数量随页面更新；取消勾选的条目不会自动加入。",13));
         confirmOverlay.addView(panelText("无次数标记的条目本轮最多1次。预约、答题、搜索、加购、关注、支付等非浏览任务不执行。",12));
         ScrollView scroll=new ScrollView(this);LinearLayout rows=new LinearLayout(this);rows.setOrientation(1);scroll.addView(rows);
         List<CheckBox> checks=new ArrayList<>(),slideChecks=new ArrayList<>();
@@ -131,7 +134,9 @@ public class BrowseService extends AccessibilityService {
         confirmOverlay.addView(scroll,new LinearLayout.LayoutParams(-1,Math.min(dp(260),dp(70)*items.size())));
         TextView totals=panelText("",14);confirmOverlay.addView(totals);
         TextView limitText=panelText("",14);confirmOverlay.addView(limitText);
-        Button go=new Button(this);go.setText("确认，只做这些浏览任务");confirmOverlay.addView(go);
+        CheckBox discover=new CheckBox(this);discover.setTextColor(Color.WHITE);discover.setTextSize(12);
+        discover.setText("返回后自动检测并继续后续纯浏览任务（排除取消勾选项）");discover.setChecked(true);confirmOverlay.addView(discover);
+        Button go=new Button(this);go.setText("确认并开始浏览任务");confirmOverlay.addView(go);
         Runnable update=()->{
             int kinds=0,times=0;
             for(int i=0;i<checks.size();i++)if(checks.get(i).isChecked()){kinds++;times+=items.get(i).remaining;}
@@ -149,6 +154,8 @@ public class BrowseService extends AccessibilityService {
                 selected.add(new BrowsePlan.Item(item.id,item.row,force));chosen.add(item);
                 getSharedPreferences("scroll-overrides",0).edit().putBoolean(learnKey(item.id),force).apply();
             }
+            for(int i=0;i<checks.size();i++)if(!checks.get(i).isChecked())selected.exclude(items.get(i).id);
+            autoDiscover=discover.isChecked();nextDiscoveryAt=0;
             int wanted=selected.executionLimit(requestLimit);closeConfirmation();
             // Let focus return to the target app before re-reading it.
             handler.postDelayed(()->{try{validateAndStart(selected,chosen,wanted);}catch(RuntimeException e){pause("确认检查异常："+e.getClass().getSimpleName()+"；未开始任务");}},450);
@@ -172,7 +179,7 @@ public class BrowseService extends AccessibilityService {
     }
     private void start(){
         if(target.isEmpty())return;
-        running=true;busy=false;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
+        running=true;busy=false;unreadableSince=0;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
     }
     private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 完成 "+count+(maxTasks>0?"/"+maxTasks:"（数量待检测）")+" 次 · 跳过 "+approved.skippedCount()+" 类\n"+s);if(markScroll!=null)markScroll.setEnabled(running&&phase==1&&!needsScroll);}
     private void advance(long now,String reason){phase=0;since=now;nextTaskAt=now+1800;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
@@ -182,7 +189,11 @@ public class BrowseService extends AccessibilityService {
     private void tick(){
         if(!running||busy)return;
         AccessibilityNodeInfo root=applicationRoot();
-        if(root==null){if(SystemClock.elapsedRealtime()-since>10000)pause("无法读取页面，请手动返回任务页");return;}
+        if(root==null){
+            long now=SystemClock.elapsedRealtime();if(unreadableSince==0)unreadableSince=now;
+            if(now-unreadableSince>10000)pause("连续10秒无法读取页面，请手动返回任务页");return;
+        }
+        unreadableSince=0;
         try{
             String pkg=root.getPackageName()==null?"":root.getPackageName().toString();
             if(!pkg.equals(target)){pause("已离开所选应用，操作已暂停");return;}
@@ -191,7 +202,9 @@ public class BrowseService extends AccessibilityService {
             long now=SystemClock.elapsedRealtime();
             if(now-runSince>=maxMinutes*60000L){pause("已到指令时间上限，请手动核对当前任务");return;}
             if(phase==0){
-                if(count>=maxTasks){pause("已完成本轮自动检测的执行数量，请手动检查奖励");return;}
+                if((requestLimit>0&&count>=requestLimit)||(!autoDiscover&&count>=maxTasks)){
+                    pause("已完成本轮执行数量，请手动检查奖励");return;
+                }
                 if(now<nextTaskAt)return;
                 if(pendingScroll){
                     if(now-since<2500)return;
@@ -200,6 +213,11 @@ public class BrowseService extends AccessibilityService {
                     since=now;
                 }
                 if(text.trim().length()<8){if(now-since>8000)pause("没有足够的可读文字，暂不支持此页面");return;}
+                if(autoDiscover&&now>=nextDiscoveryAt){
+                    nextDiscoveryAt=now+2500;
+                    int added=discoverTasks(root);
+                    if(added>0){maxTasks=approved.executionLimit(requestLimit);setStatus("自动检测新增 "+added+" 类纯浏览任务，继续执行…");}
+                }
                 scanned=0;Candidate c=find(root,0);
                 if(c==null&&!deferredTask.isEmpty()){String previous=deferredTask;deferredTask="";scanned=0;c=find(root,0);deferredTask=previous;}
                 if(c==null){
@@ -208,7 +226,7 @@ public class BrowseService extends AccessibilityService {
                         if(isTaskList(text)&&listScrolls<8&&scrollTaskList(root,0)){
                             lastList=text;seenLists.add(text);listScrolls++;pendingScroll=true;since=now;setStatus("查看下一屏任务（"+listScrolls+"/8）；跳过非浏览任务");return;
                         }
-                        pause("已无已确认的浏览任务；新任务需重新扫描确认");
+                        pause(autoDiscover?"当前已无可执行纯浏览任务（已完成、跳过或取消勾选），本轮结束":"已无已确认的浏览任务；可开启自动检测后续任务");
                     }return;
                 }
                 before=text;taskId=c.key;activeProgress=c.progress;expectedSeconds=c.seconds;attempted.add(c.attempt);taskSince=now;phase=1;leftTaskList=false;reopened=false;pendingEntry="";browseSwipes=0;backAttempts=0;lastSwipe=0;taskButton=new Rect(c.rect);clickFallbackUsed=false;timedOut=false;
@@ -244,10 +262,10 @@ public class BrowseService extends AccessibilityService {
                     if(!returnedToList(root,text)&&!performGlobalAction(GLOBAL_ACTION_BACK)){pause("返回失败，请手动返回任务列表");return;}
                     phase=2;returnSince=now;backAttempts=1;setStatus(successHint?"检测到完成提示，返回核对进度…":"浏览计时结束，返回核对是否增加进度…");return;
                 }
-                if(leftTaskList&&needsScroll&&now-browseSince>=2500&&now-lastSwipe>=3500&&browseSwipes<6){
+                if(BrowseScroll.due(leftTaskList,needsScroll,now-browseSince,now-lastSwipe)){
                     scanned=0;
-                    if(scrollBrowsePage(root,0)||swipeBrowse(root)){
-                        browseSwipes++;lastSwipe=now;setStatus("浏览任务内滑动 "+browseSwipes+" 次，等待倒计时和完成反馈…");return;
+                    if(swipeBrowse(root)){
+                        browseSwipes++;lastSwipe=now;setStatus("持续缓慢滑动 · 第 "+browseSwipes+" 次；等待完成反馈…");return;
                     }
                     lastSwipe=now;
                 }
@@ -278,14 +296,28 @@ public class BrowseService extends AccessibilityService {
             }
         }finally{root.recycle();}
     }
+    private int discoverTasks(AccessibilityNodeInfo root){
+        int added=0;previewing=true;scanExcluded.clear();scanExcluded.addAll(approved.knownIds());
+        long until=SystemClock.elapsedRealtime()+2500;
+        try{
+            for(int i=0;i<50&&SystemClock.elapsedRealtime()<until;i++){
+                scanned=0;Candidate c=find(root,0);if(c==null)break;
+                try{
+                    scanExcluded.add(c.key);
+                    if(approved.addDiscovered(new BrowsePlan.Item(c.key,c.rowText),autoDiscover))added++;
+                }finally{c.node.recycle();}
+            }
+        }finally{previewing=false;scanExcluded.clear();}
+        return added;
+    }
     private boolean returnedToList(AccessibilityNodeInfo root,String text){
         if(isTaskList(text))return true;
         confirmVisited=0;
         return containsApprovedRow(root,0);
     }
     private boolean containsApprovedRow(AccessibilityNodeInfo n,int depth){
-        if(depth>45||++confirmVisited>2400||!n.isVisibleToUser())return false;
-        String t=label(n);
+        if(depth>45||++confirmVisited>2400)return false;
+        String t=n.isVisibleToUser()?TaskRows.normalize(label(n)):"";
         if(!TaskRows.action(t).isEmpty()||TaskRules.rowCompleted(t)||TaskProgress.containsCounter(t)){
             AccessibilityNodeInfo row=AccessibilityNodeInfo.obtain(n);
             for(int k=0;k<5&&row!=null;k++){
@@ -352,9 +384,10 @@ public class BrowseService extends AccessibilityService {
         return null;
     }
     private boolean confirmedRow(AccessibilityNodeInfo n,String id,int depth){
-        if(depth>45||++confirmVisited>2400||!n.isVisibleToUser())return false;
-        String t=label(n);
-        if((activeProgress!=null&&t.replaceAll("\\s+","").contains(activeProgress.name))||TaskRules.rowCompleted(t)){
+        if(depth>45||++confirmVisited>2400)return false;
+        String t=n.isVisibleToUser()?TaskRows.normalize(label(n)):"";
+        // WebViews often put the title and (1/10) in separate sibling nodes.
+        if((activeProgress!=null&&(t.contains(activeProgress.name)||TaskProgress.containsCounter(t)))||TaskRules.rowCompleted(t)){
             AccessibilityNodeInfo row=AccessibilityNodeInfo.obtain(n);
             for(int k=0;k<5&&row!=null;k++){
                 scanned=0;String text=flatten(row,0);TaskProgress after=TaskProgress.parse(text);
@@ -368,13 +401,13 @@ public class BrowseService extends AccessibilityService {
     private boolean overlapsOverlay(Rect r){if(overlay==null)return false;int[] xy=new int[2];overlay.getLocationOnScreen(xy);return Rect.intersects(r,new Rect(xy[0],xy[1],xy[0]+overlay.getWidth(),xy[1]+overlay.getHeight()));}
     // Task-list entry labels only; no reward claims or purchase controls.
     private String findEntry(AccessibilityNodeInfo n,int depth){
-        if(depth>20||++scanned>1200||!n.isVisibleToUser())return "";
-        String t=label(n);if(NavigationRules.isEntry(t))return t;
+        if(depth>45||++scanned>2400)return "";
+        String t=n.isVisibleToUser()?TaskRows.normalize(label(n)):"";if(NavigationRules.isEntry(t))return t;
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){String found=findEntry(c,depth+1);c.recycle();if(!found.isEmpty())return found;}}return "";
     }
     private boolean clickEntry(AccessibilityNodeInfo n,String entry,int depth){
-        if(depth>20||++scanned>1200||!n.isVisibleToUser())return false;
-        if(label(n).equals(entry)){
+        if(depth>45||++scanned>2400)return false;
+        if(n.isVisibleToUser()&&TaskRows.normalize(label(n)).equals(entry)){
             AccessibilityNodeInfo click=AccessibilityNodeInfo.obtain(n);
             for(int k=0;k<2&&!click.isClickable();k++){AccessibilityNodeInfo p=click.getParent();if(p==null)break;click.recycle();click=p;}
             Rect r=new Rect();n.getBoundsInScreen(r);boolean ok=false;if(!r.isEmpty()&&r.height()<dp(200)&&!overlapsOverlay(r)){ok=click.isEnabled()&&click.performAction(AccessibilityNodeInfo.ACTION_CLICK);if(!ok)ok=tap(r);}click.recycle();return ok;
@@ -383,9 +416,9 @@ public class BrowseService extends AccessibilityService {
     }
     private int occurrences(String s,String sub){int count=0,at=0;while((at=s.indexOf(sub,at))>=0){count++;at+=sub.length();}return count;}
     private boolean scrollTaskList(AccessibilityNodeInfo n,int depth){
-        if(depth>20||++scanned>1200||!n.isVisibleToUser())return false;
+        if(depth>45||++scanned>2400)return false;
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=scrollTaskList(c,depth+1);c.recycle();if(ok)return true;}}
-        if(n.isScrollable()){
+        if(n.isVisibleToUser()&&n.isScrollable()){
             int saved=scanned;scanned=0;String t=flatten(n,0);scanned=saved;
             if(t.contains("去完成")||t.contains("去浏览")||t.contains("已完成"))return n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
         }return false;
@@ -424,16 +457,13 @@ public class BrowseService extends AccessibilityService {
         if(!running||busy)return false;
         busy=true;
         boolean accepted=dispatchGesture(new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(p,0,duration)).build(),new GestureResultCallback(){
-            @Override public void onCompleted(GestureDescription g){busy=false;}
+            @Override public void onCompleted(GestureDescription g){
+                busy=false;
+                if(duration>=BrowseScroll.DURATION_MS&&running){handler.removeCallbacks(pulse);handler.postDelayed(pulse,BrowseScroll.GAP_MS);}
+            }
             @Override public void onCancelled(GestureDescription g){busy=false;}
         },handler);
         if(!accepted)busy=false;return accepted;
-    }
-    private boolean scrollBrowsePage(AccessibilityNodeInfo n,int depth){
-        if(depth>35||++scanned>1800||!n.isVisibleToUser())return false;
-        Rect r=new Rect();n.getBoundsInScreen(r);
-        if(n.isScrollable()&&r.height()>dp(220)&&r.width()>dp(160)&&n.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD))return true;
-        for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=scrollBrowsePage(c,depth+1);c.recycle();if(ok)return true;}}return false;
     }
     private boolean scanScrollPrompts(AccessibilityNodeInfo n,int depth){
         if(depth>60||++scanned>4000)return false;
@@ -443,10 +473,15 @@ public class BrowseService extends AccessibilityService {
     private boolean swipeBrowse(AccessibilityNodeInfo root){
         Rect r=new Rect();root.getBoundsInScreen(r);
         if(r.height()<dp(260)||r.width()<dp(200))return false;
-        int x=r.left+r.width()/3;
-        Rect pathBounds=new Rect(x-2,r.top+r.height()*40/100,x+2,r.top+r.height()*72/100);
-        if(overlapsOverlay(pathBounds))return false;
-        Path p=new Path();p.moveTo(x,pathBounds.bottom);p.lineTo(x,pathBounds.top);return gesture(p,600);
+        for(int fraction:new int[]{33,67,50}){
+            int x=r.left+r.width()*fraction/100;
+            Rect pathBounds=new Rect(x-2,r.top+r.height()*40/100,x+2,r.top+r.height()*68/100);
+            if(overlapsOverlay(pathBounds))continue;
+            Path p=new Path();boolean up=BrowseScroll.upward(browseSwipes);
+            p.moveTo(x,up?pathBounds.bottom:pathBounds.top);p.lineTo(x,up?pathBounds.top:pathBounds.bottom);
+            return gesture(p,BrowseScroll.DURATION_MS);
+        }
+        return false;
     }
     private String learnKey(String id){try{byte[] hash=java.security.MessageDigest.getInstance("SHA-256").digest((target+":"+version+":"+id).getBytes(java.nio.charset.StandardCharsets.UTF_8));StringBuilder s=new StringBuilder();for(byte b:hash)s.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return s.toString();}catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
     private static final class Candidate{final AccessibilityNodeInfo node;final String key,attempt,rowText;final TaskProgress progress;final int seconds;final Rect rect;Candidate(AccessibilityNodeInfo n,String k,String a,TaskProgress p,int s,Rect r,String row){node=n;key=k;attempt=a;progress=p;seconds=s;rect=new Rect(r);rowText=row;}}

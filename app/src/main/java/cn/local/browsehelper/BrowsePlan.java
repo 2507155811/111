@@ -24,7 +24,17 @@ public final class BrowsePlan {
     private final Map<String,Item> items=new LinkedHashMap<>();
     private final Map<String,Integer> done=new HashMap<>();
     private final Set<String> skipped=new HashSet<>();
+    private final Set<String> excluded=new HashSet<>();
     public void add(Item item){items.put(item.id,item);}
+    public void exclude(String id){excluded.add(id);}
+    public Set<String> knownIds(){Set<String> ids=new HashSet<>(items.keySet());ids.addAll(excluded);return ids;}
+    /** Only opt-in pure browsing may extend a running plan. Never reset existing quotas. */
+    public boolean addDiscovered(Item item,boolean enabled){
+        if(!enabled||items.containsKey(item.id)||excluded.contains(item.id)||item.remaining<1)return false;
+        String action=TaskRows.action(item.row);
+        if(action.isEmpty()||!TaskRules.isBrowseTask(item.row,action))return false;
+        items.put(item.id,item);return true;
+    }
     public int total(){int sum=0;for(Item i:items.values())sum+=Math.max(0,i.remaining);return sum;}
     public int executionLimit(int requested){return requested>0?Math.min(requested,total()):total();}
     /** Return detection accepts known rows even when their quota is exhausted. */

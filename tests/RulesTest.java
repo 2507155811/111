@@ -5,6 +5,7 @@ import cn.local.browsehelper.NavigationRules;
 import cn.local.browsehelper.BrowsePlan;
 import cn.local.browsehelper.BrowseTiming;
 import cn.local.browsehelper.TaskRows;
+import cn.local.browsehelper.BrowseScroll;
 
 public class RulesTest {
     static int count;
@@ -189,6 +190,34 @@ public class RulesTest {
         check(TaskRows.actionCount(jdRows)==4,"JD screenshot four buttons");
         check(TaskRows.action(jdRows).isEmpty(),"whole panel never one action");
         check(TaskRows.action("浏览 6 秒 并 下 单 去 完 成").isEmpty(),"normalization preserves mixed action rejection");
+        check(!BrowseScroll.due(false,true,10000,10000),"never swipe before entering browse page");
+        check(!BrowseScroll.due(true,false,10000,10000),"ordinary dwell does not swipe");
+        check(!BrowseScroll.due(true,true,1199,10000),"allow initial browse page to settle");
+        check(!BrowseScroll.due(true,true,10000,2449),"slow stroke has a gap before repeat");
+        for(int stroke=0;stroke<30;stroke++){
+            check(BrowseScroll.due(true,true,1200+stroke*2450,2450),"scroll continues beyond six strokes "+stroke);
+            check(BrowseScroll.upward(stroke)==(stroke%2==0),"alternate direction avoids page bottom "+stroke);
+        }
+        TaskProgress split=TaskProgress.parse(TaskRows.normalize("好物沉浸看 ( 1 / 10 ) 浏览 15 秒 去完成"));
+        check(split.advancedFrom(TaskProgress.parse("好物沉浸看(0/10) 浏览15秒 去完成")),"split progress remains valid return evidence");
+        check(NavigationRules.isEntry(TaskRows.normalize("去 赚 能 量")),"split Taobao return entry");
+        BrowsePlan continuous=new BrowsePlan();
+        continuous.add(new BrowsePlan.Item("first","浏览6秒福利页面 去完成"));continuous.confirmOne("first");
+        check(!continuous.allows("first","浏览6秒福利页面 去完成"),"completed quota stays exhausted");
+        check(continuous.addDiscovered(new BrowsePlan.Item("next","浏览6秒精选页面 去完成"),true),"returned list can extend opted-in plan");
+        check(continuous.allows("next","浏览6秒精选页面 去完成"),"newly discovered task runs without rescan confirmation");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("first","浏览6秒福利页面 去完成"),true),"rescan never resets completed quota");
+        continuous.exclude("unchecked");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("unchecked","浏览6秒推荐页面 去完成"),true),"unchecked row stays excluded");
+        check(continuous.knownIds().contains("unchecked"),"scan excludes unchecked identity");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("off","浏览6秒好物页面 去完成"),false),"disabled discovery requires confirmation");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("mixed","浏览6秒并加购 去完成"),true),"new mixed action never auto-added");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("unknown","去完成"),true),"unknown task never auto-added");
+        continuous.skip("next");
+        check(!continuous.addDiscovered(new BrowsePlan.Item("next","浏览6秒精选页面 去完成"),true),"failed task not reauthorized by rescan");
+        for(int i=0;i<25;i++)check(continuous.addDiscovered(new BrowsePlan.Item("new-"+i,"浏览6秒会场"+i+" 去完成"),true),"continuous discovery beyond fixed twenty "+i);
+        check(continuous.executionLimit(0)==27,"dynamic count includes discovered tasks");
+        check(continuous.executionLimit(3)==3,"explicit count remains bounded during discovery");
         System.out.println("PASS: "+count+" checks");
     }
 }
