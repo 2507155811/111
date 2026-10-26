@@ -290,6 +290,21 @@ public class RulesTest {
         check(continueAfterMiss.allows("other","其他任务(0/1) 浏览6秒 去完成"),"missing swipe hint does not disable next task");
         continueAfterMiss.skip("miss");
         check(continueAfterMiss.allows("other","其他任务(0/1) 浏览6秒 去完成"),"second failure still allows other task");
+        BrowsePlan changedRound=new BrowsePlan();
+        changedRound.add(new BrowsePlan.Item("casual","好物随心逛(3/10) 浏览15秒 去完成",true));
+        changedRound.add(new BrowsePlan.Item("immersive","好物沉浸看(1/10) 浏览15秒 去完成"));
+        changedRound.skip("immersive");
+        check(changedRound.refreshObserved(new BrowsePlan.Item("casual","好物随心逛(3/5) 浏览15秒 去完成"),true),"screenshot round total updates from ten to five");
+        check(changedRound.allows("casual","好物随心逛(3/5) 浏览15秒 去完成"),"changed total task runs immediately after refresh");
+        check(changedRound.pendingCount()==2,"pending quota uses new total instead of stale six");
+        check(changedRound.forceScroll("casual"),"new round preserves scroll requirement");
+        check(changedRound.recoverVisible("immersive","好物沉浸看(1/10) 浏览15秒 去完成"),"visible unfinished skipped task gets one cooldown recovery");
+        check(changedRound.pendingCount()==11,"screenshot eleven remaining becomes executable after recovery");
+        changedRound.skip("immersive");
+        check(!changedRound.recoverVisible("immersive","好物沉浸看(1/10) 浏览15秒 去完成"),"unchanged failed counter cannot recover forever");
+        check(!changedRound.refreshObserved(new BrowsePlan.Item("casual","好物随心逛(3/20) 浏览15秒 去完成"),false),"fixed plan does not autoauthorize a changed total");
+        check(!changedRound.refreshObserved(new BrowsePlan.Item("casual","好物随心逛(3/20) 浏览30秒 去完成"),true),"changed duration requires confirmation");
+        check(!changedRound.refreshObserved(new BrowsePlan.Item("casual","好物随心逛(3/20) 浏览15秒并下单 去完成"),true),"new round never accepts mixed action");
         System.out.println("PASS: "+count+" checks");
     }
 }

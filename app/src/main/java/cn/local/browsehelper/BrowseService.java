@@ -50,6 +50,9 @@ public class BrowseService extends AccessibilityService {
     private final Set<String> retryScroll=new HashSet<>();
     private String refreshedText="";
     private int visibleKinds,visibleRemaining;
+    private long nextRefreshAt,nextRecoveryAt;
+    private String listReasons="";
+    private boolean blockedByOverlay;
     private String activeAttempt="";
     private String version="";
     private LinearLayout overlay;
@@ -98,7 +101,7 @@ public class BrowseService extends AccessibilityService {
         Button close=new Button(this);close.setText("关闭");close.setTextSize(12);close.setOnClickListener(v->dismiss());actions.addView(close,new LinearLayout.LayoutParams(0,dp(44),1));overlay.addView(actions);
         WindowManager.LayoutParams p=new WindowManager.LayoutParams(dp(232),-2,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);
         p.gravity=Gravity.TOP|Gravity.END;p.y=dp(100);p.x=dp(8);
-        message.setOnTouchListener(new android.view.View.OnTouchListener(){float downX,downY;int oldX,oldY;public boolean onTouch(android.view.View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getRawX();downY=e.getRawY();oldX=p.x;oldY=p.y;return true;}if(e.getAction()==MotionEvent.ACTION_MOVE){p.x=Math.max(0,Math.min(getResources().getDisplayMetrics().widthPixels-dp(232),oldX-(int)(e.getRawX()-downX)));p.y=Math.max(dp(24),Math.min(getResources().getDisplayMetrics().heightPixels-dp(150),oldY+(int)(e.getRawY()-downY)));try{((WindowManager)getSystemService(WINDOW_SERVICE)).updateViewLayout(overlay,p);}catch(RuntimeException ignored){}return true;}return true;}});
+        message.setOnTouchListener(new android.view.View.OnTouchListener(){float downX,downY;int oldX,oldY;public boolean onTouch(android.view.View v,MotionEvent e){if(e.getAction()==MotionEvent.ACTION_DOWN){downX=e.getRawX();downY=e.getRawY();oldX=p.x;oldY=p.y;return true;}if(e.getAction()==MotionEvent.ACTION_MOVE){p.x=Math.max(0,Math.min(getResources().getDisplayMetrics().widthPixels-dp(232),oldX+((p.gravity&Gravity.HORIZONTAL_GRAVITY_MASK)==Gravity.LEFT?1:-1)*(int)(e.getRawX()-downX)));p.y=Math.max(dp(24),Math.min(getResources().getDisplayMetrics().heightPixels-dp(150),oldY+(int)(e.getRawY()-downY)));try{((WindowManager)getSystemService(WINDOW_SERVICE)).updateViewLayout(overlay,p);}catch(RuntimeException ignored){}return true;}return true;}});
         try{((WindowManager)getSystemService(WINDOW_SERVICE)).addView(overlay,p);}catch(RuntimeException e){overlay=null;return false;}
         setStatus("先手动打开活动任务列表，再点开始");return true;
     }
@@ -186,7 +189,7 @@ public class BrowseService extends AccessibilityService {
     }
     private void start(){
         if(target.isEmpty())return;
-        running=true;busy=false;unreadableSince=0;refreshedText="";phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
+        running=true;busy=false;unreadableSince=0;refreshedText="";nextRefreshAt=0;nextRecoveryAt=SystemClock.elapsedRealtime()+15000;phase=0;since=SystemClock.elapsedRealtime();runSince=since;listScrolls=0;pendingScroll=false;seenLists.clear();toggle.setText("停止");handler.removeCallbacks(pulse);setStatus("识别浏览任务中…");handler.post(pulse);
     }
     private void setStatus(String s){status=s;if(message!=null)message.setText((target.equals("com.taobao.taobao")?"淘宝":"京东")+" · 核对成功 "+count+(requestLimit>0?"/"+requestLimit:"")+" 次 · 暂缓 "+approved.skippedCount()+" 类\n当前列表 "+visibleKinds+" 类 / 页面剩余 "+visibleRemaining+" 次\n"+s);if(markScroll!=null)markScroll.setEnabled(running&&phase==1&&!needsScroll);}
     private void advance(long now,String reason){refreshedText="";phase=0;since=now;nextTaskAt=now+350;deferredTask=taskId;pendingScroll=false;seenLists.clear();listScrolls=0;setStatus(reason+"；即将自动执行下一个已勾选浏览任务…");}
@@ -223,11 +226,11 @@ public class BrowseService extends AccessibilityService {
                     since=now;
                 }
                 if(text.trim().length()<8){if(now-since>8000)pause("没有足够的可读文字，暂不支持此页面");return;}
-                if(!text.equals(refreshedText)){
-                    refreshTasks(root);refreshedText=text;
+                if(!text.equals(refreshedText)||now>=nextRefreshAt){
+                    refreshTasks(root);refreshedText=text;nextRefreshAt=now+3000;
                     maxTasks=requestLimit>0?Math.min(requestLimit,count+approved.pendingCount()):count+approved.pendingCount();
                 }
-                scanned=0;Candidate c=find(root,0);
+                blockedByOverlay=false;scanned=0;Candidate c=find(root,0);
                 if(c==null&&!deferredTask.isEmpty()){String previous=deferredTask;deferredTask="";scanned=0;c=find(root,0);deferredTask=previous;}
                 if(c==null){
                     if(now-since>20000){
@@ -237,8 +240,8 @@ public class BrowseService extends AccessibilityService {
                         }
                         int pending=approved.pendingCount();
                         if(autoDiscover){
-                            setStatus(pending>0?"仍有"+pending+"次额度，当前页暂未匹配；继续检测列表和新任务…":
-                                "当前页暂无可执行任务，等待新任务并自动更新数量…");return;
+                            setStatus(blockedByOverlay?"控制条正在避让任务按钮，马上重试…":
+                                "当前任务状态："+listReasons+"；继续刷新");return;
                         }
                         pause(pending>0?"仍有"+pending+"次已确认额度，但20秒未匹配到完整任务行；请移动控制条后重扫。未判全部完成":
                             "本轮已确认任务已完成或暂缓；可重新扫描查看当前任务");
@@ -322,7 +325,7 @@ public class BrowseService extends AccessibilityService {
                     if(!timedOut&&approved.retryOnce(taskId)){
                         if(fallbackScroll&&!scrollForbidden)retryScroll.add(taskId);
                         attempted.remove(activeAttempt);advance(now,"完成暂未核对到，先做下一项；本项最多复试一次，不计成功");
-                    }else{approved.skip(taskId);advance(now,"本项仍未确认，暂缓且不计成功，继续其他任务");}
+                    }else{approved.skip(taskId);nextRecoveryAt=now+15000;advance(now,"本项仍未确认，暂缓且不计成功，继续其他任务");}
                 }
             }
         }finally{root.recycle();}
@@ -336,15 +339,21 @@ public class BrowseService extends AccessibilityService {
         finally{collecting=null;previewing=false;scanExcluded.clear();}
     }
     private void refreshTasks(AccessibilityNodeInfo root){
-        visibleKinds=0;visibleRemaining=0;
+        visibleKinds=0;visibleRemaining=0;StringBuilder reasons=new StringBuilder();
         for(Candidate c:scanCandidates(root,approved.excludedIds())){
             try{
                 BrowsePlan.Item item=new BrowsePlan.Item(c.key,c.rowText);
-                if(approved.refreshObserved(item,autoDiscover)||approved.contains(c.key)){
+                boolean refreshed=approved.refreshObserved(item,autoDiscover);
+                if(autoDiscover&&SystemClock.elapsedRealtime()>=nextRecoveryAt&&approved.recoverVisible(c.key,c.rowText)){
+                    attempted.remove(c.attempt);if(fallbackScroll)retryScroll.add(c.key);
+                }
+                if(refreshed||approved.contains(c.key)){
                     visibleKinds++;visibleRemaining+=Math.max(0,item.remaining);
+                    if(reasons.length()<100){if(reasons.length()>0)reasons.append("；");reasons.append(item.title).append("：").append(approved.blockReason(c.key,c.rowText));}
                 }
             }finally{c.node.recycle();}
         }
+        listReasons=reasons.length()>0?reasons.toString():"等待新任务出现";
     }
     private boolean returnedToList(AccessibilityNodeInfo root,String text){
         if(isTaskList(text))return true;
@@ -417,6 +426,7 @@ public class BrowseService extends AccessibilityService {
                 if(actionBounds.height()>dp(230)){clickable.recycle();clickable=AccessibilityNodeInfo.obtain(n);}
                 Rect rect=new Rect();n.getBoundsInScreen(rect);
                 if(merged&&rect.width()>dp(120)){rect.left=rect.right-Math.min(dp(86),rect.width()/3);}
+                if(!previewing&&overlapsOverlay(rect)){blockedByOverlay=true;moveOverlayAway(rect);}
                 if(!rect.isEmpty()&&rect.width()>=dp(20)&&rect.width()<dp(260)&&rect.height()>=dp(12)&&rect.height()<dp(180)&&(previewing||!overlapsOverlay(rect))){
                     Candidate candidate=new Candidate(clickable,id,attempt,progress,TaskRules.seconds(text),rect,text);
                     if(collecting==null)return candidate;
@@ -443,6 +453,20 @@ public class BrowseService extends AccessibilityService {
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo c=n.getChild(i);if(c!=null){boolean ok=confirmedRow(c,id,depth+1);c.recycle();if(ok)return true;}}return false;
     }
     private boolean overlapsOverlay(Rect r){if(overlay==null)return false;int[] xy=new int[2];overlay.getLocationOnScreen(xy);return Rect.intersects(r,new Rect(xy[0],xy[1],xy[0]+overlay.getWidth(),xy[1]+overlay.getHeight()));}
+    private void moveOverlayAway(Rect targetRect){
+        if(overlay==null||!(overlay.getLayoutParams() instanceof WindowManager.LayoutParams))return;
+        int width=getResources().getDisplayMetrics().widthPixels,height=getResources().getDisplayMetrics().heightPixels;
+        int ow=overlay.getWidth(),oh=overlay.getHeight();
+        int[][] corners={{dp(4),dp(24)},{Math.max(0,width-ow-dp(4)),dp(24)},
+            {dp(4),Math.max(dp(24),height-oh-dp(36))},{Math.max(0,width-ow-dp(4)),Math.max(dp(24),height-oh-dp(36))}};
+        for(int[] xy:corners){
+            if(Rect.intersects(targetRect,new Rect(xy[0],xy[1],xy[0]+ow,xy[1]+oh)))continue;
+            WindowManager.LayoutParams params=(WindowManager.LayoutParams)overlay.getLayoutParams();
+            params.gravity=Gravity.TOP|Gravity.LEFT;params.x=xy[0];params.y=xy[1];
+            try{((WindowManager)getSystemService(WINDOW_SERVICE)).updateViewLayout(overlay,params);}catch(RuntimeException ignored){}
+            return;
+        }
+    }
     // Task-list entry labels only; no reward claims or purchase controls.
     private String findEntry(AccessibilityNodeInfo n,int depth){
         if(depth>45||++scanned>2400)return "";
