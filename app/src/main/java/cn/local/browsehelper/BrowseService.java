@@ -113,7 +113,7 @@ public class BrowseService extends AccessibilityService {
                 scanExcluded.add(c.key);items.add(new BrowsePlan.Item(c.key,c.rowText));c.node.recycle();
             }
         }finally{previewing=false;scanExcluded.clear();root.recycle();}
-        if(items.isEmpty()){setStatus("未识别到任务 · 检查京东/淘宝窗口"+scanWindows+"个 · 可读"+previewChars+"字 / 按钮"+previewActions+"个；若面板可见仍为0，请反馈此提示，可能未向无障碍开放任务文字");return;}
+        if(items.isEmpty()){setStatus("可执行任务0 · 窗口"+scanWindows+"个 / 可读"+previewChars+"字 / 按钮"+previewActions+"个；"+(previewActions>0?"已读到按钮，但未找到符合浏览/逛直播间规则的完整任务行":"未读到任务按钮，请反馈此提示"));return;}
         showConfirmation(items);
     }
     private TextView panelText(String text,int size){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
@@ -362,7 +362,7 @@ public class BrowseService extends AccessibilityService {
             for(int k=0;k<5&&row!=null;k++){
                 int saved=scanned;scanned=0;String text=flatten(row,0);scanned=saved;
                 // Do not treat an entire list containing multiple buttons as one task row.
-                int buttons=occurrences(text,"去浏览")+occurrences(text,"去完成")+occurrences(text,"逛一逛")+occurrences(text,"去逛逛");
+                int buttons=TaskRows.actionCount(text);
                 TaskProgress progress=TaskProgress.parse(text);
                 String id=progress==null?key(text):progress.identity();
                 String attempt=progress==null?id:progress.attemptKey();

@@ -218,6 +218,24 @@ public class RulesTest {
         for(int i=0;i<25;i++)check(continuous.addDiscovered(new BrowsePlan.Item("new-"+i,"浏览6秒会场"+i+" 去完成"),true),"continuous discovery beyond fixed twenty "+i);
         check(continuous.executionLimit(0)==27,"dynamic count includes discovered tasks");
         check(continuous.executionLimit(3)==3,"explicit count remains bounded during discovery");
+        for(String host:new String[]{"胡可","香菇来了","陈洁KiKi","烈儿宝贝"}){
+            String live="逛一逛"+host+"直播间(0/2) 完成任务得600步 去完成";
+            check(TaskRules.isBrowseTask(live,"去完成"),"Taobao screenshot live visit "+host);
+            check(TaskRows.action(live).equals("去完成"),"live title is not the action button "+host);
+            check(TaskRows.actionCount(live)==1,"live title not counted as a second action "+host);
+            check(TaskRows.merged(live),"merged live task recognized "+host);
+            check(TaskRules.seconds(live)==-1,"reward is not a browse duration "+host);
+        }
+        for(String unsafe:new String[]{"邀请好友集步数(0/5) 完成任务得300步 去完成","双11来淘金币狂享20亿(0/1) 任务完成得600步 去完成","去农场1分钱领水果(0/1) 去完成","看直播领红包 去完成","逛一逛胡可直播间并关注(0/1) 去完成","逛一逛胡可直播间并下单(0/1) 去完成"}){
+            check(!TaskRules.isBrowseTask(unsafe,"去完成"),"unsupported or mixed screenshot task "+unsafe);
+            check(TaskRows.action(unsafe).isEmpty(),"unsupported merged row not selectable "+unsafe);
+        }
+        BrowsePlan livePlan=new BrowsePlan();String liveRow="逛一逛胡可直播间(0/1) 完成任务得600步 去完成";
+        livePlan.add(new BrowsePlan.Item("live",liveRow));
+        check(livePlan.allows("live",liveRow),"confirmed live task can execute");
+        check(!TaskRules.readyToVerify(-1,30000,true),"no guessed wait duration for live task");
+        check(livePlan.confirmProgress("live",TaskProgress.parse("逛一逛胡可直播间(1/1) 已完成")),"live task requires returned progress");
+        check(!livePlan.allows("live",liveRow),"finished live task cannot repeat");
         System.out.println("PASS: "+count+" checks");
     }
 }
